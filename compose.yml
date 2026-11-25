@@ -1,0 +1,18 @@
+services:
+  zlicast:
+    image: ghcr.io/zkskaze/zlicast:latest
+    container_name: zlicast
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "1907:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: Europe/Belgrade
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Попуни ADMIN_PASSWORD у .env}
+      SOURCE_PASSWORD: ${SOURCE_PASSWORD:-}
+      ZLICAST_ADDR: ":8080"
+      ZLICAST_DATA: /data
+
