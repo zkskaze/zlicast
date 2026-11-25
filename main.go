@@ -123,13 +123,13 @@ func (a *App) routes() http.Handler {
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		publicRead := strings.HasPrefix(r.URL.Path, "/stream/") || strings.HasPrefix(r.URL.Path, "/hls/") ||
-			strings.HasPrefix(r.URL.Path, "/api/stations/") && (strings.HasSuffix(r.URL.Path,"/now-playing") || strings.HasSuffix(r.URL.Path,"/history") || strings.HasSuffix(r.URL.Path,"/stats"))
+			strings.HasPrefix(r.URL.Path, "/api/stations/") && (strings.HasSuffix(r.URL.Path, "/now-playing") || strings.HasSuffix(r.URL.Path, "/history") || strings.HasSuffix(r.URL.Path, "/stats"))
 		if publicRead && (r.Method == "GET" || r.Method == "HEAD" || r.Method == "OPTIONS") {
-			w.Header().Set("Access-Control-Allow-Origin","*")
-			w.Header().Set("Access-Control-Expose-Headers","icy-name, icy-br, icy-metaint")
-			if r.Method=="OPTIONS" {
-				w.Header().Set("Access-Control-Allow-Methods","GET, HEAD, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers","Icy-MetaData, Range")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Expose-Headers", "icy-name, icy-br, icy-metaint")
+			if r.Method == "OPTIONS" {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Icy-MetaData, Range")
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
