@@ -1,0 +1,10 @@
+/.env
+/data/
+/zlicast.exe
+/*.test.exe
+/web/node_modules/
+/web/.svelte-kit/
+/web/build/
+/tmp/
+/dist/
+
