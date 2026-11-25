@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 var goodSlug = regexp.MustCompile("^[a-z0-9][a-z0-9-]{0,47}$")
 var goodColor = regexp.MustCompile("^#[0-9a-fA-F]{6}$")
+var hlsSegment = regexp.MustCompile("^index[0-9]+\\.ts$")
 
 func sameOrigin(r *http.Request) bool {
 	u, e := url.Parse(r.Header.Get("Origin"))
@@ -132,6 +134,28 @@ type stationView struct {
 }
 
 func (a *App) coreRoutes(m *http.ServeMux) {
+	m.HandleFunc("GET /hls/{slug}/{file}", func(w http.ResponseWriter, r *http.Request) {
+		e := a.engine(r.PathValue("slug"))
+		file := r.PathValue("file")
+		if e == nil || (file != "index.m3u8" && !hlsSegment.MatchString(file)) {
+			http.NotFound(w, r)
+			return
+		}
+		e.mu.Lock()
+		dir := e.hlsDir
+		e.mu.Unlock()
+		if dir == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if file == "index.m3u8" {
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			w.Header().Set("Cache-Control", "no-store")
+		} else {
+			w.Header().Set("Content-Type", "video/mp2t")
+		}
+		http.ServeFile(w, r, filepath.Join(dir, file))
+	})
 	m.HandleFunc("GET /api/system", a.permit("*", func(w http.ResponseWriter, r *http.Request, user string) {
 		cpu, ram, free := systemValues(a.data)
 		up := time.Since(a.started).Seconds()

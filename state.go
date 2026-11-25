@@ -34,10 +34,11 @@ type Station struct {
 	Logo      string `json:"logo"`
 	Color     string `json:"color"`
 	Rules     Rules  `json:"rules"`
+	HLS       bool   `json:"hls"`
 }
 
 func (s Station) config() ProgramConfig {
-	return ProgramConfig{s.Name, s.Format, s.Bitrate, s.Crossfade}
+	return ProgramConfig{s.Name, s.Format, s.Bitrate, s.Crossfade, s.HLS}
 }
 
 type Media struct {
@@ -203,6 +204,30 @@ func (a *App) track(m Media) Track      { t := m.Track; t.Path = a.mediaPath(m);
 func (a *App) available(m Media, slug string, now time.Time) bool {
 	return (m.Station == "" || m.Station == slug) && (m.Expires == "" || m.Expires >= now.In(a.loc).Format("2006-01-02"))
 }
+
+// Time tags only restrict automatic jingle rotation. Explicit cues always win.
+func jingleTime(tags []string, local time.Time) bool {
+	window, matchesWindow, date, matchesDate := false, false, false, false
+	for _, tag := range tags {
+		switch strings.ToLower(strings.TrimSpace(tag)) {
+		case "јутро":
+			window = true
+			matchesWindow = matchesWindow || local.Hour() >= 5 && local.Hour() < 12
+		case "вече":
+			window = true
+			matchesWindow = matchesWindow || local.Hour() >= 18
+		case "ноћ":
+			window = true
+			matchesWindow = matchesWindow || local.Hour() < 5
+		default:
+			if day, ok := strings.CutPrefix(tag, "датум:"); ok {
+				date = true
+				matchesDate = matchesDate || day == local.Format("2006-01-02") || day == local.Format("01-02")
+			}
+		}
+	}
+	return (!window || matchesWindow) && (!date || matchesDate)
+}
 func (a *App) engine(slug string) *Engine { a.mu.RLock(); defer a.mu.RUnlock(); return a.engines[slug] }
 func (a *App) startStation(s Station) {
 	a.mu.Lock()
@@ -221,6 +246,9 @@ func (a *App) onPlay(slug string, t Track) {
 		return
 	}
 	h := append([]Entry{{time.Now(), t}}, a.state.History[slug]...)
+	if len(a.state.Hooks) > 0 && (t.Category == "live" || len(h) > 1 && h[1].Category == "live") {
+		go a.notify(slug + " · " + t.Title)
+	}
 	a.state.History[slug] = h[:min(500, len(h))]
 	if t.Category == "music" {
 		a.rotate[slug].songs++
@@ -255,7 +283,7 @@ func (a *App) next(slug string) Track {
 	candidates := func(cat string) []Media {
 		var out []Media
 		for _, m := range a.state.Media {
-			if m.Category == cat && a.available(m, slug, now) {
+			if m.Category == cat && a.available(m, slug, now) && (cat != "jingles" || jingleTime(m.Tags, now.In(a.loc))) {
 				out = append(out, m)
 			}
 		}

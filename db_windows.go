@@ -19,6 +19,9 @@ var textSQL = sqlite.NewProc("sqlite3_column_text")
 var sizeSQL = sqlite.NewProc("sqlite3_column_bytes")
 var closeSQL = sqlite.NewProc("sqlite3_close")
 var messageSQL = sqlite.NewProc("sqlite3_errmsg16")
+var kernel = syscall.NewLazyDLL("kernel32.dll")
+var copyNative = kernel.NewProc("RtlMoveMemory")
+var utf16Length = kernel.NewProc("lstrlenW")
 
 type database struct{ h uintptr }
 
@@ -30,14 +33,9 @@ func (d *database) failure() error {
 	if p == 0 {
 		return errors.New("SQLite грешка")
 	}
-	var u []uint16
-	for n := uintptr(0); n < 2048; n++ {
-		v := *(*uint16)(unsafe.Pointer(p + n*2))
-		if v == 0 {
-			break
-		}
-		u = append(u, v)
-	}
+	n, _, _ := utf16Length.Call(p)
+	u := make([]uint16, min(n, 2048)+1)
+	copyNative.Call(uintptr(unsafe.Pointer(&u[0])), p, (uintptr(len(u))-1)*2)
 	return errors.New(syscall.UTF16ToString(u))
 }
 func openDatabase(path string) (*database, error) {
@@ -88,7 +86,12 @@ func (d *database) read() (b []byte, err error) {
 	}
 	ptr, _, _ := textSQL.Call(stmt, 0)
 	n, _, _ := sizeSQL.Call(stmt, 0)
-	return append([]byte(nil), unsafe.Slice((*byte)(unsafe.Pointer(ptr)), int(n))...), nil
+	if n == 0 {
+		return nil, nil
+	}
+	b = make([]byte, n)
+	copyNative.Call(uintptr(unsafe.Pointer(&b[0])), ptr, n)
+	return b, nil
 }
 func (d *database) close() {
 	if d.h != 0 {

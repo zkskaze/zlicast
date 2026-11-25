@@ -42,6 +42,7 @@ type Status struct {
 type ProgramConfig struct {
 	Name, Format       string
 	Bitrate, Crossfade int
+	HLS                bool
 }
 type cue struct {
 	tracks    []Track
@@ -53,19 +54,22 @@ type liveFeed struct {
 	stop  chan struct{}
 }
 type Engine struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	done        chan struct{}
-	mu          sync.Mutex
-	config      ProgramConfig
-	status      Status
-	subscribers map[chan []byte]time.Time
-	totalListen time.Duration
-	sessions    int
-	cues        chan cue
-	live        *liveFeed
-	next        func() Track
-	played      func(Track)
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
+	mu            sync.Mutex
+	config        ProgramConfig
+	status        Status
+	subscribers   map[chan []byte]time.Time
+	totalListen   time.Duration
+	sessions      int
+	cues          chan cue
+	live          *liveFeed
+	hlsDir        string
+	encoderCancel context.CancelFunc
+	lastFrame     time.Time
+	next          func() Track
+	played        func(Track)
 }
 
 func newEngine(c ProgramConfig, next func() Track, played func(Track)) *Engine {
@@ -100,9 +104,22 @@ func (e *Engine) queue(tracks []Track, immediate bool) bool {
 		return false
 	}
 }
-func (e *Engine) configure(c ProgramConfig) { e.mu.Lock(); e.config = c; e.mu.Unlock() }
-func (e *Engine) getConfig() ProgramConfig  { e.mu.Lock(); defer e.mu.Unlock(); return e.config }
-func (e *Engine) error()                    { e.mu.Lock(); e.status.Errors++; e.mu.Unlock() }
+func (e *Engine) configure(c ProgramConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if c.Format != e.config.Format {
+		// Content-Type is fixed at connection time. Let clients reopen a changed codec.
+		for sub, since := range e.subscribers {
+			close(sub)
+			delete(e.subscribers, sub)
+			e.totalListen += time.Since(since)
+			e.sessions++
+		}
+	}
+	e.config = c
+}
+func (e *Engine) getConfig() ProgramConfig { e.mu.Lock(); defer e.mu.Unlock(); return e.config }
+func (e *Engine) error()                   { e.mu.Lock(); e.status.Errors++; e.mu.Unlock() }
 
 var fallbackOnce sync.Once
 var theme []byte
@@ -236,10 +253,31 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 		codec, format = "aac", "adts"
 	}
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-f", "s16le", "-ar", "48000", "-ac", "2", "-probesize", "32", "-analyzeduration", "0", "-i", "pipe:0", "-c:a", codec, "-b:a", fmt.Sprintf("%dk", cfg.Bitrate), "-flush_packets", "1"}
-	if format == "mp3" {
-		args = append(args, "-write_xing", "0", "-id3v2_version", "0")
+	var dir string
+	if cfg.HLS {
+		var err error
+		dir, err = os.MkdirTemp("", "zlicast-hls-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(dir)
+		e.mu.Lock()
+		e.hlsDir = dir
+		e.mu.Unlock()
+		defer func() { e.mu.Lock(); e.hlsDir = ""; e.mu.Unlock() }()
+		opts := "f=" + format + ":flush_packets=1"
+		if format == "mp3" {
+			opts += ":write_xing=0:id3v2_version=0"
+		}
+		args = append(args, "-map", "0:a:0", "-f", "tee", "["+opts+"]pipe:1|[f=hls:hls_time=3:hls_list_size=5:hls_start_number_source=epoch:hls_flags=delete_segments+temp_file]index.m3u8")
+	} else {
+		if format == "mp3" {
+			args = append(args, "-write_xing", "0", "-id3v2_version", "0")
+		}
+		args = append(args, "-f", format, "pipe:1")
 	}
-	cmd := exec.CommandContext(ctx, "ffmpeg", append(args, "-f", format, "pipe:1")...)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd.Dir = dir
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -251,6 +289,31 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	e.mu.Lock()
+	e.encoderCancel = cancel
+	e.lastFrame = time.Now()
+	e.mu.Unlock()
+	defer func() { e.mu.Lock(); e.encoderCancel = nil; e.mu.Unlock() }()
+	unblock := context.AfterFunc(ctx, func() { stdin.Close(); stdout.Close() })
+	defer unblock()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				e.mu.Lock()
+				stalled := time.Since(e.lastFrame) > 8*time.Second
+				e.mu.Unlock()
+				if stalled {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 	outDone := make(chan struct{})
 	go func() {
 		defer close(outDone)
@@ -262,6 +325,7 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 			}
 			e.mu.Lock()
 			e.status.OnAir = true
+			e.lastFrame = time.Now()
 			for sub, at := range e.subscribers {
 				select {
 				case sub <- b:
@@ -310,7 +374,6 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 			}
 		}
 		current = d
-		quiet = 0
 		e.setTrack(d.track, false)
 	}
 	defer func() { current.close(); previous.close() }()
@@ -321,13 +384,16 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 	for {
 		select {
 		case <-ctx.Done():
+			if e.ctx.Err() == nil {
+				return fmt.Errorf("енкодер је прекинут")
+			}
 			return nil
 		case <-outDone:
 			return fmt.Errorf("енкодер је заустављен")
 		case <-tick.C:
 		}
 		c := e.getConfig()
-		if c.Format != cfg.Format || c.Bitrate != cfg.Bitrate {
+		if c.Format != cfg.Format || c.Bitrate != cfg.Bitrate || c.HLS != cfg.HLS {
 			return nil
 		}
 		e.mu.Lock()
@@ -395,9 +461,13 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 			v := int(int16(binary.LittleEndian.Uint16(b[i:])))
 			peak = max(peak, v, -v)
 		}
-		if peak < 8 && !wasLive {
+		if peak < 8 {
 			quiet++
-			if quiet >= 250 {
+			if wasLive && quiet >= 750 {
+				e.endLive(live)
+				e.error()
+				quiet = 0
+			} else if !wasLive && quiet >= 250 {
 				previous.close()
 				previous = nil
 				current.close()
@@ -443,8 +513,10 @@ func (e *Engine) stream(w http.ResponseWriter, r *http.Request) {
 	sub := make(chan []byte, 96)
 	e.mu.Lock()
 	c := e.config
-	e.subscribers[sub] = time.Now()
-	e.status.Peak = max(e.status.Peak, len(e.subscribers))
+	if r.Method != http.MethodHead {
+		e.subscribers[sub] = time.Now()
+		e.status.Peak = max(e.status.Peak, len(e.subscribers))
+	}
 	e.mu.Unlock()
 	defer func() {
 		e.mu.Lock()
@@ -468,6 +540,9 @@ func (e *Engine) stream(w http.ResponseWriter, r *http.Request) {
 	const interval = 16384
 	if icy {
 		w.Header().Set("icy-metaint", "16384")
+	}
+	if r.Method == http.MethodHead {
+		return
 	}
 	ctl := http.NewResponseController(w)
 	ctl.Flush()

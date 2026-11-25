@@ -166,6 +166,20 @@ func (a *App) addMedia(ctx context.Context, user string, src io.Reader, filename
 		s.Media = append(s.Media, m)
 		return nil
 	})
+	if err == nil {
+		a.mu.RLock()
+		for _, s := range a.state.Stations {
+			cat := s.Rules.Category
+			if cat == "" {
+				cat = "music"
+			}
+			e := a.engines[s.Slug]
+			if e != nil && m.Category == cat && a.available(m, s.Slug, time.Now()) && e.snapshot().Now.Category == "fallback" {
+				e.queue([]Track{a.track(m)}, true)
+			}
+		}
+		a.mu.RUnlock()
+	}
 	return m, false, err
 }
 func (a *App) mediaRoutes(mux *http.ServeMux) {

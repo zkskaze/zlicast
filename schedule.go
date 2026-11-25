@@ -101,6 +101,7 @@ func (a *App) clock(ctx context.Context) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	last := ""
+	previous := map[string]Status{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -111,8 +112,18 @@ func (a *App) clock(ctx context.Context) {
 			if minute != last {
 				last = minute
 				a.mu.Lock()
+				var notifications []string
 				for slug, e := range a.engines {
 					s := e.snapshot()
+					old, seen := previous[slug]
+					if seen && (s.OnAir != old.OnAir || s.Errors > old.Errors) {
+						msg := "ван етра"
+						if s.OnAir {
+							msg = "у етру"
+						}
+						notifications = append(notifications, fmt.Sprintf("%s · %s · грешака %d", slug, msg, s.Errors))
+					}
+					previous[slug] = s
 					h := append(a.state.Samples[slug], Sample{now, s.Listeners, s.OnAir})
 					a.state.Samples[slug] = h[max(0, len(h)-1440):]
 				}
@@ -120,6 +131,9 @@ func (a *App) clock(ctx context.Context) {
 					fmt.Println(err)
 				}
 				a.mu.Unlock()
+				for _, message := range notifications {
+					go a.notify(message)
+				}
 			}
 		}
 	}
