@@ -365,7 +365,13 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 			if current == nil || current.pos >= current.total {
 				next(false)
 			} else if current.track.Category == "music" && previous == nil && current.pos >= current.total/2 && current.total-current.pos <= int64(c.Crossfade)*192000 {
-				next(false)
+				if len(pending) == 0 {
+					candidate := e.next()
+					pending = append(pending, candidate)
+					if candidate.Category == "music" {
+						next(false)
+					}
+				}
 			}
 			current.read(b)
 			if previous != nil {
