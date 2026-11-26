@@ -10,6 +10,7 @@
   import Admin from '$lib/Admin.svelte';
   import Stats from '$lib/Stats.svelte';
   import SimpleMode from '$lib/SimpleMode.svelte';
+  import { openRadioPlayer } from '$lib/radio-player.js';
   import { api, cats, duration, permitted } from '$lib/api.js';
   let mode = 'loading',
     data = null,
@@ -27,7 +28,7 @@
     history = [],
     player = '',
     simpleStation = '',
-    audio,
+    playback,
     toastTimer,
     navOpen = false;
   const nav = [
@@ -117,44 +118,22 @@
     }
   }
   function endListen() {
-    if (audio) {
-      audio.onerror = null;
-      audio.pause();
-      audio.removeAttribute('src');
-      audio.load();
-      audio = null;
-    }
+    playback?.close();
+    playback = null;
     player = '';
   }
-  async function listen(s) {
+  function listen(s) {
     if (player === s.slug) {
       endListen();
       return;
     }
     endListen();
-    const a = new Audio();
-    audio = a;
     player = s.slug;
-    a.onerror = () => {
-      if (audio === a) {
-        const message = a.error?.code === 4
-          ? 'Прегледач није могао да отвори аудио-стрим.'
-          : 'Веза са аудио-стримом је прекинута.';
-        endListen();
-        notify(message);
-      }
-    };
-    a.src = '/stream/' + encodeURIComponent(s.slug);
-    try {
-      await a.play();
-    } catch (e) {
-      if (audio === a) {
-        endListen();
-        notify(e.name === 'NotAllowedError'
-          ? 'Прегледач је блокирао звук. Провери дозволу за звук на овој страници.'
-          : 'Аудио-стрим се није отворио. Покушај поново за неколико секунди.');
-      }
-    }
+    playback = openRadioPlayer(s, message => {
+      endListen();
+      notify(message);
+    });
+    playback.start();
   }
   $: title = nav.find((n) => n[0] === view)?.[2] || 'Контролна соба';
   $: if (data && view === 'admin' && data.role !== 'admin') view = 'home';

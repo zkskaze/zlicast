@@ -18,7 +18,17 @@ import (
 )
 
 func TestHLSOutput(t *testing.T) {
-	e := newEngine(ProgramConfig{Name: "Kaze", Format: "aac", Bitrate: 128, HLS: true}, func() Track { return Track{} }, func(Track) {})
+	for _, format := range []string{"aac", "mp3"} {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			testHLSAndDirectStream(t, format)
+		})
+	}
+}
+
+func testHLSAndDirectStream(t *testing.T, format string) {
+	t.Helper()
+	e := newEngine(ProgramConfig{Name: "Kaze", Format: format, Bitrate: 128, HLS: true}, func() Track { return Track{} }, func(Track) {})
 	defer e.close()
 	var playlist string
 	until := time.Now().Add(12 * time.Second)
@@ -52,6 +62,22 @@ func TestHLSOutput(t *testing.T) {
 	out, err := exec.Command("ffmpeg", "-v", "error", "-i", ts, "-f", "s16le", "-t", "1", "pipe:1").Output()
 	if err != nil || len(out) < 96000 {
 		t.Fatal(err, len(out))
+	}
+	server, client := memoryServer(http.HandlerFunc(e.stream))
+	defer server.Close()
+	response, err := client.Get("http://radio.local/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	audio := make([]byte, 16*1024)
+	if _, err = io.ReadFull(response.Body, audio); err != nil {
+		t.Fatal(err)
+	}
+	decode := exec.Command("ffmpeg", "-v", "error", "-i", "pipe:0", "-f", "s16le", "pipe:1")
+	decode.Stdin = bytes.NewReader(audio)
+	if pcm, err := decode.Output(); err != nil || len(pcm) < 96000 {
+		t.Fatal("direct stream is not decodable with HLS enabled", err, len(pcm))
 	}
 }
 func TestLiveStudioHandover(t *testing.T) {

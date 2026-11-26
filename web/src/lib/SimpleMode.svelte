@@ -13,6 +13,7 @@
   let every = station.rules.jingleSongs || 0;
   let jingle = station.rules.jingleId || '';
   let news = '';
+  let song = '';
   let busy = '';
   let songsInput;
   let jingleInput;
@@ -20,7 +21,7 @@
   let dragging = false;
 
   $: available = media.filter(m => !m.station || m.station === station.slug);
-  $: songCount = available.filter(m => m.category === 'music').length;
+  $: songs = available.filter(m => m.category === 'music');
   $: jingles = available.filter(m => m.category === 'jingles');
   $: bulletins = available.filter(m => ['news', 'emergency', 'shows'].includes(m.category));
   $: canUpload = permitted(role, 'dj', 'editor');
@@ -80,9 +81,20 @@
   function playNews(file) {
     withAction('Шаљем снимак у етар…', async () => {
       const id = file ? (await upload(file, 'news')).id : news;
-      await api('/api/stations/' + station.slug + '/play', 'POST', { id, interrupt: true });
+      await playNow(id);
       news = id;
       notify('Снимак је послат у етар.');
+    });
+  }
+
+  function playNow(id) {
+    return api('/api/stations/' + station.slug + '/play', 'POST', { id, interrupt: true });
+  }
+
+  function playSong() {
+    withAction('Шаљем песму у етар…', async () => {
+      await playNow(song);
+      notify('Песма је послата у етар.');
     });
   }
 </script>
@@ -110,10 +122,23 @@
     >
       <Icon name="cloud-upload" size={30}/>
       <strong>{busy || 'Превуци песме овде'}</strong>
-      <span>{songCount} песама у ротацији · кликни за избор фајлова</span>
+      <span>{songs.length} песама у ротацији · кликни за избор фајлова</span>
     </button>
     <input class="hidden" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.ogg,.m4a,.aac" bind:this={songsInput}
       on:change={(event) => { addSongs(event.currentTarget.files); event.currentTarget.value = ''; }}/>
+    {#if songs.length}
+      <form on:submit|preventDefault={playSong}>
+        <label>Песма у ротацији
+          <select bind:value={song}>
+            <option value="">Изабери песму</option>
+            {#each songs as item (item.id)}
+              <option value={item.id}>{item.title}</option>
+            {/each}
+          </select>
+        </label>
+        <button disabled={!!busy || !song}><Icon name="play" size={16}/> Пусти песму одмах</button>
+      </form>
+    {/if}
   {/if}
 </section>
 
