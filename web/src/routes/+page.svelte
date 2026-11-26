@@ -10,8 +10,7 @@
   import Admin from '$lib/Admin.svelte';
   import Stats from '$lib/Stats.svelte';
   import SimpleMode from '$lib/SimpleMode.svelte';
-  import VolumeControl from '$lib/VolumeControl.svelte';
-  import PlaylistLinks from '$lib/PlaylistLinks.svelte';
+  import PlaybackControls from '$lib/PlaybackControls.svelte';
   import { openRadioPlayer } from '$lib/radio-player.js';
   import { api, cats, duration, permitted } from '$lib/api.js';
   let mode = 'loading',
@@ -205,13 +204,7 @@
               <h1>{pub.name}</h1>
               <h2>{pub.status.now.title||'Покретање програма'}</h2>
               <p>{pub.status.now.artist||cats[pub.status.now.category]}</p>
-              <div class="controls">
-                <button class="primary" on:click={()=>listen(pub)}>
-                  <Icon name={player?'pause':'play'}/>{player?'Заустави':'Слушај уживо'}
-                </button>
-                <VolumeControl {volume} {setVolume}/>
-                <PlaylistLinks slug={pub.slug} {notify}/>
-              </div>
+              <PlaybackControls station={pub} playing={player === pub.slug} {listen} {volume} {setVolume} publicPage/>
             </div>
           </section>
           {#if history.length>1}
@@ -289,7 +282,6 @@
                 </div>
                 <div class="sectionhead">
                   <h2>Радио-станице</h2>
-                  <VolumeControl {volume} {setVolume}/>
                 </div>
                 <div class="stations">
                   {#each data.stations as s}
@@ -299,8 +291,20 @@
                         <div class="row">
                         <h2>{s.name}</h2><span class="pill" class:live={s.status.onAir}>{s.status.onAir?'● У ЕТРУ':'Припрема'}</span>
                         </div>
-                        <div class="specs">{s.format.toUpperCase()} <span>/</span> {s.bitrate} kbps <span>/</span> {s.status.listeners}
-                        <Icon name="headphones" size={12}/>
+                        <div class="row">
+                          <div class="specs">{s.format.toUpperCase()} <span>/</span> {s.bitrate} kbps <span>/</span> {s.status.listeners}
+                            <Icon name="headphones" size={12}/>
+                          </div>
+                          <div class="stationactions">
+                            <a class="icon" href={'/listen/'+s.slug} target="_blank" rel="noreferrer" aria-label={'Јавни плејер · '+s.name} title="Јавни плејер">
+                              <Icon name="external-link" size={15}/>
+                            </a>
+                            {#if data.role==='admin'}
+                              <button class="icon" on:click={()=>stationEdit=s} aria-label={'Подешавања · '+s.name} title="Подешавања">
+                                <Icon name="sliders-horizontal" size={15}/>
+                              </button>
+                            {/if}
+                          </div>
                         </div>
                         <div class="now">
                         <div class="audioicon">
@@ -310,19 +314,7 @@
                         <small>Сада свира</small><b>{s.status.now.title||'Припрема програма'}</b>
                         </div>
                         </div>
-                        <div class="stationactions">
-                        <button on:click={()=>listen(s)} class:playing={player===s.slug}>
-                        <Icon name={player===s.slug?'pause':'play'} size={15}/>{player===s.slug?'Заустави':'Слушај'}
-                        </button>
-                        <a class="icon" href={'/listen/'+s.slug} target="_blank" rel="noreferrer" aria-label={'Јавни плејер · '+s.name} title="Јавни плејер">
-                        <Icon name="external-link"/>
-                        </a>
-                        {#if data.role==='admin'}
-                        <button class="icon" on:click={()=>stationEdit=s} aria-label={'Подешавања · '+s.name} title="Подешавања">
-                        <Icon name="sliders-horizontal"/>
-                        </button>{/if}
-                        </div>
-                        <PlaylistLinks slug={s.slug} {notify}/>
+                        <PlaybackControls station={s} playing={player === s.slug} {listen} {volume} {setVolume}/>
                       </div>
                     </article>{:else}
                     <p>Додај прву станицу да покренеш емитовање.</p>{/each}

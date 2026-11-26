@@ -441,16 +441,14 @@ nav button.active svg {
 .stationactions {
   display: flex;
   align-items: center;
-  gap: 6px;
-}
-.stationactions button:first-child {
-  flex: 1;
-  height: 34px;
+  gap: 3px;
 }
 .stationactions .icon {
-  border: 1px solid var(--edge);
-  width: 35px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
+}
+.simple-receiver:not(:last-child) {
+  margin-bottom: 16px;
 }
 .textbtn {
   background: transparent;
