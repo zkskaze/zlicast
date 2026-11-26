@@ -61,4 +61,4 @@ FFmpeg и FFprobe морају бити у PATH-у. На рачунару на �
 
 One container. Endless frequencies.
 
-Developed by ZKS · Powered by CRNBG.ORG
+Developed by ZKS

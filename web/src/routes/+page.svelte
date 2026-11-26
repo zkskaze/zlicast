@@ -201,7 +201,7 @@
           <small>Подаци за локалну пријаву су у фајлу <code>.env</code>.</small>
         </div>
       </section>
-      <footer>ZKS <span>·</span> CRNBG.ORG</footer>
+      <footer>ZKS</footer>
     </main>
     {:else if mode==='public'}
       <main class="listenpage">
@@ -375,7 +375,7 @@
                         <Stats {data} {notify}/>
                         {:else if view==='admin'}
                         <Admin stations={data.stations} {notify}/>{/if}
-              <footer>ZKS <span>·</span> CRNBG.ORG</footer>
+              <footer>ZKS</footer>
             </div>
           </main>
         </div>{/if}

@@ -872,9 +872,6 @@ footer {
   color: #859184;
   margin: 32px 0 8px;
 }
-footer span {
-  margin: 0 6px;
-}
 @media (min-width: 1450px) {
   .ident {
     height: 180px;
