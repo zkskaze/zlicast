@@ -11,6 +11,22 @@ import (
 	"time"
 )
 
+func TestListenAddress(t *testing.T) {
+	t.Setenv("ZLICAST_PORT", "")
+	t.Setenv("ZLICAST_ADDR", "")
+	if got := listenAddress(); got != ":1907" {
+		t.Fatalf("default listen address is %q, want :1907", got)
+	}
+	t.Setenv("ZLICAST_ADDR", "localhost:1907")
+	if got := listenAddress(); got != "localhost:1907" {
+		t.Fatalf("legacy listen address is %q, want localhost:1907", got)
+	}
+	t.Setenv("ZLICAST_PORT", "19207")
+	if got := listenAddress(); got != ":19207" {
+		t.Fatalf("configured listen address is %q, want :19207", got)
+	}
+}
+
 func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	a, err := newApp(t.TempDir(), "admin", "test", "", time.UTC)
 	if err != nil {
@@ -21,7 +37,8 @@ func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	server, client := memoryServer(a.routes())
 	defer server.Close()
 
-	request, _ := http.NewRequest("GET", "http://radio.local/listen/zlifm.m3u", nil)
+	const origin = "http://radio.local:19207"
+	request, _ := http.NewRequest("GET", origin+"/listen/zlifm.m3u", nil)
 	request.Header.Set("Origin", "http://external-player.example")
 	playlist, err := client.Do(request)
 	if err != nil {
@@ -35,7 +52,7 @@ func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	if playlist.Header.Get("Access-Control-Allow-Origin") != "*" {
 		t.Fatal("cross-origin player cannot fetch the playlist")
 	}
-	download, err := client.Get("http://radio.local/listen/zlifm.m3u?download=1")
+	download, err := client.Get(origin + "/listen/zlifm.m3u?download=1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +64,7 @@ func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\r\n")
 	if len(lines) != 3 || lines[0] != "#EXTM3U" || lines[1] != "#EXTINF:-1,ZliFM" ||
-		lines[2] != "http://radio.local/stream/zlifm.mp3" {
+		lines[2] != origin+"/stream/zlifm.mp3" {
 		t.Fatalf("unexpected playlist: %q", data)
 	}
 	audio, err := client.Get(lines[2])
@@ -58,7 +75,7 @@ func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	if audio.StatusCode != 200 || audio.Header.Get("Content-Type") != "audio/mpeg" {
 		t.Fatal("playlist does not lead to MP3", audio.Status, audio.Header)
 	}
-	pcm, err := client.Get("http://radio.local/stream/zlifm/pcm")
+	pcm, err := client.Get(origin + "/stream/zlifm/pcm")
 	if err != nil {
 		t.Fatal(err)
 	}

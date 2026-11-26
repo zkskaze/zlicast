@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -47,7 +48,7 @@ func decode(r *http.Request, v any) error {
 func loadEnv(dir string) error {
 	path := filepath.Join(dir, ".env")
 	if _, err := os.Stat(path); os.IsNotExist(err) && os.Getenv("ADMIN_PASSWORD") == "" {
-		contents := fmt.Sprintf("ADMIN_USER=admin\nADMIN_PASSWORD=%s\nSOURCE_PASSWORD=%s\nZLICAST_ADDR=127.0.0.1:1907\nZLICAST_DATA=data\nTZ=Europe/Belgrade\n", randomID()[:18], randomID())
+		contents := fmt.Sprintf("ADMIN_USER=admin\nADMIN_PASSWORD=%s\nSOURCE_PASSWORD=%s\nZLICAST_PORT=1907\nZLICAST_DATA=data\nTZ=Europe/Belgrade\n", randomID()[:18], randomID())
 		f, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if e != nil {
 			return e
@@ -95,6 +96,14 @@ func env(k, d string) string {
 	}
 	return d
 }
+
+func listenAddress() string {
+	if port := os.Getenv("ZLICAST_PORT"); port != "" {
+		return net.JoinHostPort("", port)
+	}
+	return env("ZLICAST_ADDR", ":1907")
+}
+
 func (a *App) routes() http.Handler {
 	mux := http.NewServeMux()
 	a.coreRoutes(mux)
@@ -171,7 +180,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	addr := env("ZLICAST_ADDR", "127.0.0.1:1907")
+	addr := listenAddress()
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -194,9 +203,15 @@ func run() error {
 	go func() { defer close(clockDone); a.clock(ctx) }()
 	server := &http.Server{Handler: a.routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 75 * time.Second, MaxHeaderBytes: 32 << 10}
 	go func() { <-ctx.Done(); server.Close() }()
-	url := "http://" + addr
+	bound := l.Addr().(*net.TCPAddr)
+	host, _, _ := net.SplitHostPort(addr)
+	if bound.IP.IsUnspecified() {
+		host = "localhost"
+	}
+	url := "http://" + net.JoinHostPort(host, strconv.Itoa(bound.Port))
+	fmt.Printf("Слуша на %s\n", bound)
 	fmt.Printf("ZliCast · %s\nАдминистратор: %s  |  приступни подаци: %s\n", url, user, filepath.Join(dir, ".env"))
-	if runtime.GOOS == "windows" && env("ZLICAST_OPEN_BROWSER", "1") == "1" && (strings.HasPrefix(addr, "127.0.0.1:") || strings.HasPrefix(addr, "localhost:")) {
+	if runtime.GOOS == "windows" && env("ZLICAST_OPEN_BROWSER", "1") == "1" && (bound.IP.IsUnspecified() || bound.IP.IsLoopback()) {
 		cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 		if cmd.Start() == nil {
 			go cmd.Wait()

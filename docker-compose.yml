@@ -5,7 +5,7 @@ services:
     pull_policy: always
     restart: unless-stopped
     ports:
-      - "1907:8080"
+      - "${ZLICAST_PORT:-1907}:8080"
     volumes:
       - type: bind
         source: ./data
@@ -15,6 +15,6 @@ services:
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Попуни ADMIN_PASSWORD у .env}
       SOURCE_PASSWORD: ${SOURCE_PASSWORD:-}
-      ZLICAST_ADDR: ":8080"
+      ZLICAST_PORT: "8080"
       ZLICAST_DATA: /data
 
