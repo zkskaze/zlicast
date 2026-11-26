@@ -9,10 +9,11 @@
   import Studio from '$lib/Studio.svelte';
   import Admin from '$lib/Admin.svelte';
   import Stats from '$lib/Stats.svelte';
+  import SimpleMode from '$lib/SimpleMode.svelte';
   import { api, cats, duration, permitted } from '$lib/api.js';
   let mode = 'loading',
     data = null,
-    view = 'home',
+    view = 'simple',
     stationEdit = undefined,
     notice = '',
     loginError = '',
@@ -25,10 +26,12 @@
     publicError = '',
     history = [],
     player = '',
+    simpleStation = '',
     audio,
     toastTimer,
     navOpen = false;
   const nav = [
+    ['simple', 'radio', 'Једноставно'],
     ['home', 'layout-dashboard', 'Контролна соба'],
     ['media', 'library-big', 'Медијатека'],
     ['schedule', 'calendar-days', 'Распоред'],
@@ -47,7 +50,7 @@
     historyReplace(v);
   };
   function historyReplace(v) {
-    window.history.replaceState(null, '', v === 'home' ? '/' : '/#' + v);
+    window.history.replaceState(null, '', v === 'simple' ? '/' : '/#' + v);
   }
   async function refresh() {
     try {
@@ -108,13 +111,14 @@
       endListen();
       data = null;
       mode = 'login';
-      go('home');
+      go('simple');
     } catch (e) {
       notify(e.message);
     }
   }
   function endListen() {
     if (audio) {
+      audio.onerror = null;
       audio.pause();
       audio.removeAttribute('src');
       audio.load();
@@ -128,21 +132,27 @@
       return;
     }
     endListen();
-    const a = new Audio('/stream/' + s.slug);
+    const a = new Audio();
     audio = a;
     player = s.slug;
     a.onerror = () => {
       if (audio === a) {
+        const message = a.error?.code === 4
+          ? 'Прегледач није могао да отвори аудио-стрим.'
+          : 'Веза са аудио-стримом је прекинута.';
         endListen();
-        notify('Стрим је прекинут. Покрени слушање поново.');
+        notify(message);
       }
     };
+    a.src = '/stream/' + encodeURIComponent(s.slug);
     try {
       await a.play();
     } catch (e) {
       if (audio === a) {
         endListen();
-        notify('Прегледач није покренуо репродукцију.');
+        notify(e.name === 'NotAllowedError'
+          ? 'Прегледач је блокирао звук. Провери дозволу за звук на овој страници.'
+          : 'Аудио-стрим се није отворио. Покушај поново за неколико секунди.');
       }
     }
   }
@@ -150,6 +160,7 @@
   $: if (data && view === 'admin' && data.role !== 'admin') view = 'home';
   $: if (data && view === 'studio' && !permitted(data.role, 'editor', 'dj')) view = 'home';
   $: totalListeners = data?.stations.reduce((n, s) => n + s.status.listeners, 0) || 0;
+  $: quickStation = data?.stations.find(s => s.slug === simpleStation) ?? data?.stations[0];
   const brand = 'ZliCast';
 </script>
 <svelte:head><title>{mode==='public'&&pub?pub.name:mode==='admin'?title:'Радио студио'} · ZliCast</title></svelte:head>
@@ -259,7 +270,23 @@
                     <Icon name="plus"/> Нова станица
                   </button>{/if}
               </div>
-              {#if view==='home'}
+              {#if view==='simple'}
+                {#if quickStation}
+                  <label>Станица
+                    <select value={quickStation.slug} on:change={(event) => simpleStation = event.currentTarget.value}>
+                      {#each data.stations as station}
+                        <option value={station.slug}>{station.name}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  {#key quickStation.slug}
+                    <SimpleMode station={quickStation} media={data.media} role={data.role} {player} {listen} {refresh} {notify}/>
+                  {/key}
+                {:else}
+                  <p>Додај станицу да почнеш емитовање.</p>
+                  {#if data.role==='admin'}<button class="primary" on:click={()=>stationEdit=null}>Нова станица</button>{/if}
+                {/if}
+              {:else if view==='home'}
                 <div class="summary">
                   {#each [['radio-tower',data.stations.filter(s=>s.status.onAir).length,'Станице у етру'],['headphones',totalListeners,'Слушалаца сада'],['disc-3',data.media.length,'Снимака у библиотеци']] as m}
                     <div>

@@ -199,6 +199,33 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 		}
 		respond(w, 200, map[string]any{"user": user, "role": role, "stations": list, "media": a.state.Media, "events": a.state.Events, "playlists": a.state.Playlists, "timezone": a.loc.String()})
 	}))
+	m.HandleFunc("PATCH /api/stations/{slug}/jingle", a.permit("admin", func(w http.ResponseWriter, r *http.Request, user string) {
+		var rule struct {
+			ID    string `json:"id"`
+			Every int    `json:"every"`
+		}
+		if decode(r, &rule) != nil || rule.Every < 0 || rule.Every > 1000 {
+			fail(w, 400, "Унеси број песама од 0 до 1000.")
+			return
+		}
+		slug := r.PathValue("slug")
+		err := a.change(user, "Џингл по броју песама · "+slug, func(s *State) error {
+			i := slices.IndexFunc(s.Stations, func(st Station) bool { return st.Slug == slug })
+			if i < 0 {
+				return bad("Непозната станица.")
+			}
+			if rule.ID != "" {
+				m, ok := findMedia(s, rule.ID)
+				if !ok || m.Category != "jingles" || !a.available(m, slug, time.Now()) {
+					return bad("Џингл није доступан за ову станицу.")
+				}
+			}
+			s.Stations[i].Rules.JingleSongs = rule.Every
+			s.Stations[i].Rules.JingleID = rule.ID
+			return nil
+		})
+		result(w, err)
+	}))
 	m.HandleFunc("POST /api/stations", a.permit("admin", func(w http.ResponseWriter, r *http.Request, user string) {
 		var s Station
 		if decode(r, &s) != nil || !goodSlug.MatchString(s.Slug) || strings.TrimSpace(s.Name) == "" || len(s.Name) > 100 {

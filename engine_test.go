@@ -29,10 +29,13 @@ func TestBroadcastSharesAudibleFrames(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer one.Body.Close()
-			if _, err := io.ReadFull(one.Body, make([]byte, 4096)); err != nil {
+			start := make([]byte, 4096)
+			if _, err := io.ReadFull(one.Body, start); err != nil {
 				t.Fatal(err)
 			}
-			two, err := client.Get("http://radio.local/stream")
+			request, _ := http.NewRequest("GET", "http://radio.local/stream", nil)
+			request.Header.Set("Range", "bytes=0-")
+			two, err := client.Do(request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,8 +47,14 @@ func TestBroadcastSharesAudibleFrames(t *testing.T) {
 			if _, err = io.ReadFull(one.Body, a); err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(a, b[:8000]) {
+			if two.StatusCode != http.StatusOK {
+				t.Fatalf("stream GET returned %s", two.Status)
+			}
+			if !bytes.Contains(append(start, a...), b[:8000]) {
 				t.Fatal("listeners received different frames")
+			}
+			if format == "mp3" && (b[4] != 0 || b[5]&0x80 != 0) {
+				t.Fatal("first MP3 frame depends on frames sent before joining")
 			}
 			cmd := exec.Command("ffmpeg", "-v", "error", "-i", "pipe:0", "-f", "s16le", "-ac", "1", "pipe:1")
 			cmd.Stdin = bytes.NewReader(b)

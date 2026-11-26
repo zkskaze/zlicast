@@ -18,6 +18,7 @@ import (
 
 type Rules struct {
 	JingleSongs   int    `json:"jingleSongs"`
+	JingleID      string `json:"jingleId"`
 	JingleMinutes int    `json:"jingleMinutes"`
 	IDHourly      bool   `json:"idHourly"`
 	AdMinutes     int    `json:"adMinutes"`
@@ -252,6 +253,12 @@ func (a *App) onPlay(slug string, t Track) {
 	a.state.History[slug] = h[:min(500, len(h))]
 	if t.Category == "music" {
 		a.rotate[slug].songs++
+	} else if t.Category == "jingles" {
+		rot := a.rotate[slug]
+		now := time.Now()
+		rot.songs = 0
+		rot.jingle = now
+		rot.hour = now.In(a.loc).Format("2006-01-02T15")
 	}
 	if err := a.saveLocked(); err != nil {
 		log.Println(err)
@@ -278,7 +285,8 @@ func (a *App) next(slug string) Track {
 		category = "music"
 	}
 	hour := now.In(a.loc).Format("2006-01-02T15")
-	jingle := r.IDHourly && rot.hour != hour || r.JingleSongs > 0 && rot.songs >= r.JingleSongs || r.JingleMinutes > 0 && now.Sub(rot.jingle) >= time.Duration(r.JingleMinutes)*time.Minute
+	jingleByCount := r.JingleSongs > 0 && rot.songs >= r.JingleSongs
+	jingleByTime := r.IDHourly && rot.hour != hour || r.JingleMinutes > 0 && now.Sub(rot.jingle) >= time.Duration(r.JingleMinutes)*time.Minute
 	ad := r.AdMinutes > 0 && now.Sub(rot.ad) >= time.Duration(r.AdMinutes)*time.Minute
 	candidates := func(cat string) []Media {
 		var out []Media
@@ -289,11 +297,13 @@ func (a *App) next(slug string) Track {
 		}
 		return out
 	}
-	if jingle {
+	if jingleByCount && r.JingleID != "" {
+		if m, ok := findMedia(&a.state, r.JingleID); ok && m.Category == "jingles" && a.available(m, slug, now) {
+			return a.track(m)
+		}
+	}
+	if jingleByTime || jingleByCount && r.JingleID == "" {
 		if list := candidates("jingles"); len(list) > 0 {
-			rot.jingle = now
-			rot.songs = 0
-			rot.hour = hour
 			return a.track(list[randv2.IntN(len(list))])
 		}
 	}

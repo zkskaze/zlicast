@@ -18,6 +18,7 @@ import (
 const sampleRate = 48000
 const blockFrames = 960
 const blockBytes = blockFrames * 4
+const startupFrames = 32
 
 type Track struct {
 	ID       string  `json:"id"`
@@ -61,6 +62,8 @@ type Engine struct {
 	config        ProgramConfig
 	status        Status
 	subscribers   map[chan []byte]time.Time
+	recentFrames  [startupFrames][]byte
+	recentIndex   int
 	totalListen   time.Duration
 	sessions      int
 	cues          chan cue
@@ -115,6 +118,8 @@ func (e *Engine) configure(c ProgramConfig) {
 			e.totalListen += time.Since(since)
 			e.sessions++
 		}
+		e.recentFrames = [startupFrames][]byte{}
+		e.recentIndex = 0
 	}
 	e.config = c
 }
@@ -253,6 +258,10 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 		codec, format = "aac", "adts"
 	}
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-f", "s16le", "-ar", "48000", "-ac", "2", "-probesize", "32", "-analyzeduration", "0", "-i", "pipe:0", "-c:a", codec, "-b:a", fmt.Sprintf("%dk", cfg.Bitrate), "-flush_packets", "1"}
+	if format == "mp3" {
+		// New listeners may start on any frame.
+		args = append(args, "-reservoir", "0")
+	}
 	var dir string
 	if cfg.HLS {
 		var err error
@@ -324,8 +333,14 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 				return
 			}
 			e.mu.Lock()
+			if e.config.Format != cfg.Format {
+				e.mu.Unlock()
+				return
+			}
 			e.status.OnAir = true
 			e.lastFrame = time.Now()
+			e.recentFrames[e.recentIndex] = b
+			e.recentIndex = (e.recentIndex + 1) % startupFrames
 			for sub, at := range e.subscribers {
 				select {
 				case sub <- b:
@@ -514,6 +529,11 @@ func (e *Engine) stream(w http.ResponseWriter, r *http.Request) {
 	e.mu.Lock()
 	c := e.config
 	if r.Method != http.MethodHead {
+		for i := range startupFrames {
+			if b := e.recentFrames[(e.recentIndex+i)%startupFrames]; b != nil {
+				sub <- b
+			}
+		}
 		e.subscribers[sub] = time.Now()
 		e.status.Peak = max(e.status.Peak, len(e.subscribers))
 	}
@@ -545,10 +565,14 @@ func (e *Engine) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctl := http.NewResponseController(w)
-	ctl.Flush()
+	startup := time.NewTimer(8 * time.Second)
+	defer startup.Stop()
 	left := interval
 	for {
 		select {
+		case <-startup.C:
+			http.Error(w, "Станица тренутно нема аудио.", http.StatusServiceUnavailable)
+			return
 		case <-e.ctx.Done():
 			return
 		case <-r.Context().Done():
@@ -557,6 +581,7 @@ func (e *Engine) stream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			startup.Stop()
 			ctl.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			size := len(b)
 			for len(b) > 0 {
