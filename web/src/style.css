@@ -239,7 +239,7 @@ nav {
   gap: 5px;
   margin-top: 46px;
 }
-nav button {
+aside nav a {
   justify-content: flex-start;
   gap: 13px;
   padding: 13px 14px;
@@ -248,12 +248,16 @@ nav button {
   color: #adb9af;
   font-size: 14px;
 }
-nav button.active {
+aside nav a:hover {
+  background: #1c251b;
+  color: var(--text);
+}
+aside nav a.active {
   background: #232e21;
   border-color: #354632;
   color: #daefca;
 }
-nav button.active svg {
+aside nav a.active svg {
   color: var(--accent);
 }
 .sidebarfoot {

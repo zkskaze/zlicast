@@ -48,12 +48,19 @@
     toastTimer = setTimeout(() => (notice = ''), 7000);
   };
   const go = (v) => {
-    view = v;
     navOpen = false;
-    historyReplace(v);
+    if (location.hash.slice(1) !== (v === 'simple' ? '' : v)) location.hash = v === 'simple' ? '' : v;
+    view = v;
   };
-  function historyReplace(v) {
-    window.history.replaceState(null, '', v === 'simple' ? '/' : '/#' + v);
+  function updateView() {
+    const hash = location.hash.slice(1);
+    view = nav.some(([id]) => id === hash) ? hash : 'simple';
+    navOpen = false;
+  }
+  function followNav(event, id) {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    go(id);
   }
   async function refresh() {
     try {
@@ -87,8 +94,8 @@
       mode = 'public';
       publicData();
     } else {
-      const h = location.hash.slice(1);
-      if (nav.some((n) => n[0] === h)) view = h;
+      updateView();
+      window.addEventListener('hashchange', updateView);
       refresh();
     }
     const t = setInterval(() => {
@@ -98,6 +105,7 @@
     return () => {
       clearInterval(t);
       clearTimeout(toastTimer);
+      window.removeEventListener('hashchange', updateView);
       endListen();
     };
   });
@@ -221,12 +229,13 @@
         <div class="shell">
           <aside class:open={navOpen}>
             <div class="brand"><img src="/mark.svg" alt=""/>ZliCast</div>
-            <nav>
+            <nav aria-label="Главни мени">
               {#each nav as [id,icon,label]}
                 {#if (id!=='admin'||data.role==='admin')&&(id!=='studio'||permitted(data.role,'dj','editor'))}
-                  <button class:active={view===id} on:click={()=>go(id)}>
+                  <a class="btn" class:active={view===id} href={id==='simple' ? '/' : '/#'+id}
+                    aria-current={view===id ? 'page' : undefined} on:click={(event)=>followNav(event,id)}>
                     <Icon name={icon}/>{label}
-                  </button>{/if}{/each}
+                  </a>{/if}{/each}
             </nav>
             <div class="sidebarfoot">
               <div class="avatar">{data.user.slice(0,1).toUpperCase()}</div>

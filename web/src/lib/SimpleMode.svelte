@@ -1,7 +1,7 @@
 <script>
   import Icon from './Icon.svelte';
   import PlaybackControls from './PlaybackControls.svelte';
-  import { api, permitted } from './api.js';
+  import { api, importMedia, permitted } from './api.js';
 
   export let station;
   export let media;
@@ -23,6 +23,7 @@
   let jingleInput;
   let newsInput;
   let dragging = false;
+  let uploadErrors = [];
 
   $: available = media.filter(m => !m.station || m.station === station.slug);
   $: songs = available.filter(m => m.category === 'music');
@@ -32,12 +33,12 @@
   $: bulletins = available.filter(m => ['news', 'emergency', 'shows'].includes(m.category));
   $: canUpload = permitted(role, 'dj', 'editor');
 
-  async function upload(file, category) {
+  async function upload(file, category, onProcessing) {
     const form = new FormData();
     form.append('file', file);
     form.append('category', category);
     form.append('station', station.slug);
-    return (await api('/api/media', 'POST', form)).media;
+    return (await importMedia(form, onProcessing)).media;
   }
 
   async function withAction(label, action) {
@@ -56,16 +57,17 @@
   function addSongs(files) {
     if (!files?.length) return;
     withAction('Додајем песме…', async () => {
-      const errors = [];
+      uploadErrors = [];
       for (const [i, file] of Array.from(files).entries()) {
-        busy = `Додајем песме (${i + 1}/${files.length})…`;
+        const position = `${i + 1}/${files.length} · ${file.name}`;
+        busy = 'Шаљем ' + position;
         try {
-          await upload(file, 'music');
+          await upload(file, 'music', () => busy = 'Обрађујем ' + position);
         } catch (error) {
-          errors.push(`${file.name}: ${error.message}`);
+          uploadErrors = [...uploadErrors, `${file.name}: ${error.message}`];
         }
       }
-      notify(errors.length ? errors.join(' · ') : 'Песме су у ротацији.');
+      notify(uploadErrors.length ? 'Неуспела отпремања: ' + uploadErrors.length : 'Песме су у ротацији.');
     });
   }
 
@@ -77,7 +79,7 @@
 
   function saveJingle(file) {
     withAction('Чувам џингл…', async () => {
-      const id = file ? (await upload(file, 'jingles')).id : jingle;
+      const id = file ? (await upload(file, 'jingles', () => busy = 'Обрађујем џингл…')).id : jingle;
       await api('/api/stations/' + station.slug + '/jingle', 'PATCH', { id, every });
       jingle = id;
       notify(every ? `Џингл иде после ${every} песама.` : 'Аутоматски џингл по броју песама је искључен.');
@@ -135,6 +137,12 @@
     </button>
     <input class="hidden" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.ogg,.m4a,.aac" bind:this={songsInput}
       on:change={(event) => { addSongs(event.currentTarget.files); event.currentTarget.value = ''; }}/>
+    {#if uploadErrors.length}
+      <details open>
+        <summary>Неуспела отпремања ({uploadErrors.length})</summary>
+        <ul>{#each uploadErrors as error}<li>{error}</li>{/each}</ul>
+      </details>
+    {/if}
     {#if songs.length}
       <form on:submit|preventDefault={playSong}>
         <label>Претражи песме

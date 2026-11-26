@@ -126,6 +126,7 @@ type App struct {
 	attempts                     map[string][]time.Time
 	started                      time.Time
 	uploadMu                     sync.Mutex
+	imports                      mediaImports
 }
 
 func randomID() string {
@@ -403,6 +404,7 @@ func (rot *rotation) pick(category string, list []Media, history []Entry, rules 
 	return chosen
 }
 func (a *App) stop() {
+	a.imports.stop()
 	a.mu.Lock()
 	engines := a.engines
 	a.engines = map[string]*Engine{}

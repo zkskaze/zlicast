@@ -6,14 +6,31 @@ export async function api(path, method = 'GET', value) {
     opt.headers = { 'Content-Type': 'application/json' };
     opt.body = JSON.stringify(value);
   }
-  const r = await fetch(path, opt);
+  let r;
+  try {
+    r = await fetch(path, opt);
+  } catch {
+    throw new Error('Веза са ZliCast сервером је прекинута.');
+  }
   const v = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const e = new Error(v.error || 'Захтев није успео.');
+    const e = new Error(v.error || `Захтев није успео (HTTP ${r.status}).`);
     e.status = r.status;
     throw e;
   }
   return v;
+}
+
+export async function importMedia(form, onProcessing) {
+  const { job } = await api('/api/media?async=1', 'POST', form);
+  if (!job) throw new Error('ZliCast није потврдио пријем фајла.');
+  onProcessing();
+  for (;;) {
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    const status = await api('/api/media/imports/' + encodeURIComponent(job));
+    if (status.status === 'complete') return status;
+    if (status.status === 'failed') throw new Error(status.error);
+  }
 }
 export const cats = {
   music: 'Музика',

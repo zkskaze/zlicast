@@ -42,7 +42,46 @@ type probeInfo struct {
 	}
 }
 
+func (a *App) stageMedia(src io.Reader) (work, digest string, err error) {
+	work, err = os.MkdirTemp(a.data, ".import-")
+	if err != nil {
+		return "", "", err
+	}
+	staging := work
+	defer func() {
+		if err != nil {
+			os.RemoveAll(staging)
+		}
+	}()
+	f, err := os.Create(filepath.Join(work, "input"))
+	if err != nil {
+		return "", "", err
+	}
+	hash := sha256.New()
+	n, err := io.Copy(io.MultiWriter(f, hash), io.LimitReader(src, uploadLimit+1))
+	closeErr := f.Close()
+	if err != nil {
+		return "", "", err
+	}
+	if closeErr != nil {
+		return "", "", closeErr
+	}
+	if n > uploadLimit || n == 0 {
+		return "", "", bad("Фајл мора бити између 1 бајта и 512 MiB.")
+	}
+	return work, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func (a *App) addMedia(ctx context.Context, user string, src io.Reader, filename, cat, slug, tags, expiry string) (Media, bool, error) {
+	work, digest, err := a.stageMedia(src)
+	if err != nil {
+		return Media{}, false, err
+	}
+	defer os.RemoveAll(work)
+	return a.importStagedMedia(ctx, user, work, digest, filename, cat, slug, tags, expiry)
+}
+
+func (a *App) importStagedMedia(ctx context.Context, user, work, digest, filename, cat, slug, tags, expiry string) (Media, bool, error) {
 	var m Media
 	if !slices.Contains(categories, cat) {
 		return m, false, bad("Непозната категорија.")
@@ -52,31 +91,12 @@ func (a *App) addMedia(ctx context.Context, user string, src io.Reader, filename
 			return m, false, bad("Провери датум истека.")
 		}
 	}
-	work, err := os.MkdirTemp(a.data, ".import-")
-	if err != nil {
-		return m, false, err
-	}
-	defer os.RemoveAll(work)
 	raw := filepath.Join(work, "input")
-	f, err := os.Create(raw)
-	if err != nil {
-		return m, false, err
-	}
-	hash := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, hash), io.LimitReader(src, uploadLimit+1))
-	closeErr := f.Close()
-	if err != nil {
-		return m, false, err
-	}
-	if closeErr != nil {
-		return m, false, closeErr
-	}
-	if n > uploadLimit || n == 0 {
-		return m, false, bad("Фајл мора бити између 1 бајта и 512 MiB.")
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
 	a.uploadMu.Lock()
 	defer a.uploadMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return m, false, err
+	}
 	a.mu.RLock()
 	stationOK := slug == "" || hasStation(&a.state, slug)
 	for _, v := range a.state.Media {
@@ -273,13 +293,34 @@ func (a *App) mediaRoutes(mux *http.ServeMux) {
 			return
 		}
 		defer file.Close()
-		m, dup, err := a.addMedia(r.Context(), user, file, header.Filename, r.FormValue("category"), r.FormValue("station"), r.FormValue("tags"), r.FormValue("expires"))
+		work, digest, err := a.stageMedia(file)
+		if err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		category, station, tags, expires := r.FormValue("category"), r.FormValue("station"), r.FormValue("tags"), r.FormValue("expires")
+		if r.URL.Query().Get("async") == "1" {
+			id, ok := a.imports.start(user, func(ctx context.Context) (Media, bool, error) {
+				defer os.RemoveAll(work)
+				return a.importStagedMedia(ctx, user, work, digest, header.Filename, category, station, tags, expires)
+			})
+			if !ok {
+				os.RemoveAll(work)
+				fail(w, 503, "Ред за обраду је пун. Покушај поново кад се ослободи.")
+				return
+			}
+			respond(w, 202, map[string]string{"job": id})
+			return
+		}
+		defer os.RemoveAll(work)
+		m, dup, err := a.importStagedMedia(r.Context(), user, work, digest, header.Filename, category, station, tags, expires)
 		if err != nil {
 			fail(w, 400, err.Error())
 			return
 		}
 		respond(w, 200, map[string]any{"media": m, "duplicate": dup})
 	}))
+	mux.HandleFunc("GET /api/media/imports/{job}", a.permit("admin,editor,dj", a.imports.status))
 	mux.HandleFunc("GET /api/media/{id}/{kind}", a.permit("*", func(w http.ResponseWriter, r *http.Request, user string) {
 		a.mu.RLock()
 		m, ok := findMedia(&a.state, r.PathValue("id"))

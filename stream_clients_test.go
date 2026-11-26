@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
@@ -20,7 +21,9 @@ func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	server, client := memoryServer(a.routes())
 	defer server.Close()
 
-	playlist, err := client.Get("http://radio.local/listen/zlifm.m3u")
+	request, _ := http.NewRequest("GET", "http://radio.local/listen/zlifm.m3u", nil)
+	request.Header.Set("Origin", "http://external-player.example")
+	playlist, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,6 +31,9 @@ func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	playlist.Body.Close()
 	if err != nil || playlist.StatusCode != 200 || playlist.Header.Get("Content-Disposition") != "" {
 		t.Fatalf("playlist: %s, %s, %v", playlist.Status, playlist.Header, err)
+	}
+	if playlist.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("cross-origin player cannot fetch the playlist")
 	}
 	download, err := client.Get("http://radio.local/listen/zlifm.m3u?download=1")
 	if err != nil {

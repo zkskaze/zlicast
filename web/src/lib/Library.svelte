@@ -1,6 +1,6 @@
 <script>
   import Icon from './Icon.svelte';
-  import { api, cats, duration, permitted } from './api.js';
+  import { api, importMedia, cats, duration, permitted } from './api.js';
   export let data, refresh, notify;
   let query = '',
     filter = '',
@@ -18,24 +18,26 @@
     page = 1,
     pageSize = 25,
     marked = new Set(),
-    deleting = false;
+    deleting = false,
+    uploadErrors = [];
   async function upload(files) {
     if (busy || !files?.length) return;
     busy = true;
     let n = 0,
       dups = 0;
-    const errors = [];
+    uploadErrors = [];
     for (const f of Array.from(files)) {
-      progress = n + 1 + '/' + files.length + ' · ' + f.name;
+      const position = n + 1 + '/' + files.length + ' · ' + f.name;
+      progress = 'Шаљем ' + position;
       try {
         const body = new FormData();
         Object.entries({ file: f, category: cat, station: scope, tags, expires }).forEach(([k, v]) =>
           body.append(k, v)
         );
-        const result = await api('/api/media', 'POST', body);
+        const result = await importMedia(body, () => progress = 'Обрађујем ' + position);
         if (result.duplicate) dups++;
       } catch (e) {
-        errors.push(f.name + ' · ' + e.message);
+        uploadErrors = [...uploadErrors, f.name + ' · ' + e.message];
       }
       n++;
     }
@@ -43,7 +45,7 @@
     progress = '';
     if (picker) picker.value = '';
     await refresh();
-    notify(errors.length ? errors.join(' / ') : 'Обрађено ' + n + ' · дупликата ' + dups);
+    notify('Успешно: ' + (n - uploadErrors.length) + ' · дупликата: ' + dups + ' · грешака: ' + uploadErrors.length);
   }
   async function remove(m) {
     if (!confirm('Уклони „' + m.title + '“ из библиотеке?')) return;
@@ -117,6 +119,12 @@
       <strong>{busy?progress:'Превуци музику овде'}</strong><span>или изабери фајлове · MP3, FLAC, WAV, OGG, M4A, AAC</span>
     </button>
     <input class="hidden" type="file" multiple bind:this={picker} accept="audio/*,.m4a,.aac,.flac,.webm" on:change={(e)=>upload(e.target.files)}/>
+    {#if uploadErrors.length}
+      <details open>
+        <summary>Неуспела отпремања ({uploadErrors.length})</summary>
+        <ul>{#each uploadErrors as error}<li>{error}</li>{/each}</ul>
+      </details>
+    {/if}
     <details>
       <summary>Опције отпремања</summary>
       <div class="formgrid">
