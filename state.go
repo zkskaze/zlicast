@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	randv2 "math/rand/v2"
 	"os"
 	"path/filepath"
@@ -27,19 +28,29 @@ type Rules struct {
 	Category      string `json:"category"`
 }
 type Station struct {
-	Slug      string `json:"slug"`
-	Name      string `json:"name"`
-	Format    string `json:"format"`
-	Bitrate   int    `json:"bitrate"`
-	Crossfade int    `json:"crossfade"`
-	Logo      string `json:"logo"`
-	Color     string `json:"color"`
-	Rules     Rules  `json:"rules"`
-	HLS       bool   `json:"hls"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Website     string `json:"website,omitempty"`
+	Owner       string `json:"owner,omitempty"`
+	Format      string `json:"format"`
+	Bitrate     int    `json:"bitrate"`
+	Crossfade   int    `json:"crossfade"`
+	Logo        string `json:"logo"`
+	Color       string `json:"color"`
+	Rules       Rules  `json:"rules"`
+	HLS         bool   `json:"hls"`
 }
 
 func (s Station) config() ProgramConfig {
 	return ProgramConfig{s.Name, s.Format, s.Bitrate, s.Crossfade, s.HLS}
+}
+
+func (s Station) rotationCategory() string {
+	if s.Rules.Category == "" {
+		return "music"
+	}
+	return s.Rules.Category
 }
 
 type Media struct {
@@ -113,6 +124,7 @@ type rotation struct {
 	category   string
 	rank       map[string]uint64
 	played     map[string]bool
+	upcoming   []string
 }
 type App struct {
 	mu                           sync.RWMutex
@@ -257,7 +269,11 @@ func (a *App) startStation(s Station) {
 		e.configure(s.config())
 		return
 	}
-	a.rotate[s.Slug] = &rotation{jingle: time.Now(), ad: time.Now(), hour: time.Now().In(a.loc).Format("2006-01-02T15")}
+	now := time.Now()
+	a.rotate[s.Slug] = &rotation{
+		jingle: now, ad: now, hour: now.In(a.loc).Format("2006-01-02T15"),
+		category: s.rotationCategory(), played: make(map[string]bool),
+	}
 	a.engines[s.Slug] = newEngine(s.config(), func() Track { return a.next(s.Slug) }, func(t Track) { a.onPlay(s.Slug, t) })
 }
 func (a *App) onPlay(slug string, t Track) {
@@ -280,7 +296,7 @@ func (a *App) onPlay(slug string, t Track) {
 		rot.jingle = now
 		rot.hour = now.In(a.loc).Format("2006-01-02T15")
 	}
-	if rot := a.rotate[slug]; t.Category == rot.category && rot.played != nil {
+	if rot := a.rotate[slug]; !t.autoRotation && t.Category == rot.category && rot.played != nil {
 		rot.played[t.ID] = true
 	}
 	if err := a.saveLocked(); err != nil {
@@ -303,10 +319,7 @@ func (a *App) next(slug string) Track {
 	}
 	now := time.Now()
 	r := s.Rules
-	category := r.Category
-	if category == "" {
-		category = "music"
-	}
+	category := s.rotationCategory()
 	hour := now.In(a.loc).Format("2006-01-02T15")
 	jingleByCount := r.JingleSongs > 0 && rot.songs >= r.JingleSongs
 	jingleByTime := r.IDHourly && rot.hour != hour || r.JingleMinutes > 0 && now.Sub(rot.jingle) >= time.Duration(r.JingleMinutes)*time.Minute
@@ -340,15 +353,21 @@ func (a *App) next(slug string) Track {
 	if len(list) == 0 {
 		return Track{}
 	}
-	chosen := rot.pick(category, list, a.state.History[slug], r, now)
-	return a.track(chosen)
+	upcoming := rot.plan(category, list, a.state.History[slug], r, now)
+	chosen := upcoming[0]
+	rot.upcoming = rot.upcoming[1:]
+	rot.played[chosen.ID] = true
+	track := a.track(chosen)
+	track.autoRotation = true
+	return track
 }
 
-func (rot *rotation) pick(category string, list []Media, history []Entry, rules Rules, now time.Time) Media {
+func (rot *rotation) prepare(category string, list []Media) {
 	if rot.category != category || rot.played == nil {
 		rot.category = category
 		rot.played = make(map[string]bool)
 		rot.rank = nil
+		rot.upcoming = nil
 	}
 	if rot.rank == nil {
 		rot.rank = make(map[string]uint64)
@@ -356,7 +375,74 @@ func (rot *rotation) pick(category string, list []Media, history []Entry, rules 
 	if !slices.ContainsFunc(list, func(m Media) bool { return !rot.played[m.ID] }) {
 		clear(rot.played)
 		clear(rot.rank)
+		rot.upcoming = nil
 	}
+}
+
+func (rot *rotation) plan(category string, list []Media, history []Entry, rules Rules, now time.Time) []Media {
+	rot.prepare(category, list)
+	remaining := make(map[string]Media, len(list))
+	for _, m := range list {
+		if !rot.played[m.ID] {
+			remaining[m.ID] = m
+		}
+	}
+	result := make([]Media, 0, 5)
+	rot.upcoming = slices.DeleteFunc(rot.upcoming, func(id string) bool {
+		m, ok := remaining[id]
+		if ok {
+			result = append(result, m)
+			delete(remaining, id)
+		}
+		return !ok
+	})
+	if len(result) == 5 || len(remaining) == 0 {
+		return result
+	}
+	simulated := *rot
+	simulated.played = maps.Clone(rot.played)
+	plannedHistory := make([]Entry, 0, len(history)+5)
+	for i := len(result) - 1; i >= 0; i-- {
+		m := result[i]
+		simulated.played[m.ID] = true
+		plannedHistory = append(plannedHistory, Entry{At: now, Track: m.Track})
+	}
+	plannedHistory = append(plannedHistory, history...)
+	for len(result) < 5 && len(remaining) > 0 {
+		m := simulated.pick(category, list, plannedHistory, rules, now)
+		rot.upcoming = append(rot.upcoming, m.ID)
+		result = append(result, m)
+		delete(remaining, m.ID)
+		plannedHistory = append([]Entry{{At: now, Track: m.Track}}, plannedHistory...)
+	}
+	return result
+}
+
+func (a *App) upcomingLocked(s Station) []Track {
+	rot := a.rotate[s.Slug]
+	out := []Track{}
+	if rot == nil {
+		return out
+	}
+	category := s.rotationCategory()
+	now := time.Now()
+	var eligible []Media
+	for _, m := range a.state.Media {
+		if m.Category == category && a.available(m, s.Slug, now) && (category != "jingles" || jingleTime(m.Tags, now.In(a.loc))) {
+			eligible = append(eligible, m)
+		}
+	}
+	if len(eligible) == 0 {
+		return out
+	}
+	for _, m := range rot.plan(category, eligible, a.state.History[s.Slug], s.Rules, now) {
+		out = append(out, m.Track)
+	}
+	return out
+}
+
+func (rot *rotation) pick(category string, list []Media, history []Entry, rules Rules, now time.Time) Media {
+	rot.prepare(category, list)
 
 	lastTrack, lastArtist := make(map[string]time.Time), make(map[string]time.Time)
 	previous := ""

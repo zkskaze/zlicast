@@ -21,13 +21,14 @@ const blockBytes = blockFrames * 4
 const startupFrames = 32
 
 type Track struct {
-	ID        string  `json:"id"`
-	Title     string  `json:"title"`
-	Artist    string  `json:"artist"`
-	Category  string  `json:"category"`
-	Duration  float64 `json:"duration"`
-	Path      string  `json:"-"`
-	Temporary bool    `json:"-"`
+	ID           string  `json:"id"`
+	Title        string  `json:"title"`
+	Artist       string  `json:"artist"`
+	Category     string  `json:"category"`
+	Duration     float64 `json:"duration"`
+	Path         string  `json:"-"`
+	autoRotation bool
+	Temporary    bool `json:"-"`
 }
 
 func (t Track) discard() {
@@ -39,6 +40,7 @@ func (t Track) discard() {
 type Status struct {
 	Now            Track     `json:"now"`
 	Started        time.Time `json:"started"`
+	Elapsed        float64   `json:"elapsed"`
 	OnAir          bool      `json:"onAir"`
 	Live           bool      `json:"live"`
 	Level          float64   `json:"level"`
@@ -56,6 +58,7 @@ type ProgramConfig struct {
 type cue struct {
 	tracks    []Track
 	immediate bool
+	skip      time.Time
 }
 type liveFeed struct {
 	title string
@@ -130,7 +133,20 @@ func (e *Engine) queue(tracks []Track, immediate bool) bool {
 		return false
 	}
 	select {
-	case e.cues <- cue{tracks, immediate}:
+	case e.cues <- cue{tracks: tracks, immediate: immediate}:
+		return true
+	default:
+		return false
+	}
+}
+func (e *Engine) skip(started time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ctx.Err() != nil || e.live != nil || e.status.Now.Category != "music" || !e.status.Started.Equal(started) {
+		return false
+	}
+	select {
+	case e.cues <- cue{skip: started}:
 		return true
 	default:
 		return false
@@ -218,6 +234,7 @@ func openDeck(t Track) (*deck, error) {
 				st, err := f.Stat()
 				offset, _ := f.Seek(0, io.SeekCurrent)
 				if err == nil && st.Size() >= offset+n {
+					t.Duration = float64(n) / (sampleRate * 4)
 					return &deck{track: t, file: f, total: n}, nil
 				}
 				break
@@ -257,6 +274,7 @@ func (e *Engine) setTrack(t Track, live bool) {
 	e.mu.Lock()
 	e.status.Now = t
 	e.status.Started = time.Now()
+	e.status.Elapsed = 0
 	e.status.Live = live
 	e.mu.Unlock()
 	e.played(t)
@@ -463,7 +481,14 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 			}
 			select {
 			case q := <-e.cues:
-				if q.immediate {
+				if !q.skip.IsZero() {
+					e.mu.Lock()
+					sameSong := e.status.Now.Category == "music" && e.status.Started.Equal(q.skip)
+					e.mu.Unlock()
+					if sameSong {
+						next(true)
+					}
+				} else if q.immediate {
 					pending = append(q.tracks, pending...)
 					next(true)
 				} else {
@@ -524,6 +549,9 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 		}
 		e.mu.Lock()
 		e.status.Level = float64(peak) / 32768
+		if !wasLive {
+			e.status.Elapsed = float64(current.pos) / (sampleRate * 4)
+		}
 		if len(e.pcmSubscribers) > 0 {
 			e.publishLocked(e.pcmSubscribers, append([]byte(nil), b...))
 		}

@@ -11,6 +11,8 @@
   import Stats from '$lib/Stats.svelte';
   import SimpleMode from '$lib/SimpleMode.svelte';
   import PlaybackControls from '$lib/PlaybackControls.svelte';
+  import StationDetails from '$lib/StationDetails.svelte';
+  import TrackProgress from '$lib/TrackProgress.svelte';
   import { openRadioPlayer } from '$lib/radio-player.js';
   import { api, cats, duration, permitted } from '$lib/api.js';
   let mode = 'loading',
@@ -101,7 +103,7 @@
     const t = setInterval(() => {
       if (mode === 'admin' && !document.hidden) refresh();
       if (mode === 'public') publicData();
-    }, 3500);
+    }, publicSlug ? 2000 : 3500);
     return () => {
       clearInterval(t);
       clearTimeout(toastTimer);
@@ -208,11 +210,21 @@
           <section class="listenbox">
             <Art slug={pub.slug} name={pub.name} color={pub.color} logo={pub.logo} large={true}/>
             <div class="listenbody">
-              <div class="row"><span class="pill" class:live={pub.status.onAir}>{pub.status.onAir?'● У ЕТРУ':'Припрема'}</span><span class="mono">{pub.format.toUpperCase()} / {pub.bitrate} kbps</span></div>
-              <h1>{pub.name}</h1>
-              <h2>{pub.status.now.title||'Покретање програма'}</h2>
-              <p>{pub.status.now.artist||cats[pub.status.now.category]}</p>
-              <PlaybackControls station={pub} playing={player === pub.slug} {listen} {volume} {setVolume} publicPage/>
+              <div class="row">
+                <h1>{pub.name}</h1>
+                <span class="mono">{pub.format.toUpperCase()} / {pub.bitrate} kbps</span>
+              </div>
+              <StationDetails station={pub}/>
+              <PlaybackControls station={pub} playing={player === pub.slug} {listen} {volume} {setVolume} publicPage expanded/>
+              <div class="now">
+                <div class="audioicon"><Icon name="audio-lines" size={18}/></div>
+                <div class="grow">
+                  <small>Тренутно свира</small>
+                  <b>{pub.status.now.title || 'Покретање програма'}</b>
+                  {#if pub.status.now.artist}<small>{pub.status.now.artist}</small>{/if}
+                </div>
+              </div>
+              <TrackProgress status={pub.status}/>
             </div>
           </section>
           {#if history.length>1}
@@ -276,7 +288,7 @@
                     </select>
                   </label>
                   {#key quickStation.slug}
-                    <SimpleMode station={quickStation} media={data.media} role={data.role} {player} {listen} {volume} {setVolume} {refresh} {notify}/>
+                    <SimpleMode station={quickStation} media={data.media} role={data.role} {player} {listen} {volume} {setVolume} {refresh} {notify} editStation={s => stationEdit = s}/>
                   {/key}
                 {:else}
                   <p>Додај станицу да почнеш емитовање.</p>
@@ -298,7 +310,7 @@
                       <Art slug={s.slug} name={s.name} color={s.color} logo={s.logo}/>
                       <div class="stationbody">
                         <div class="row">
-                        <h2>{s.name}</h2><span class="pill" class:live={s.status.onAir}>{s.status.onAir?'● У ЕТРУ':'Припрема'}</span>
+                        <h2>{s.name}</h2>
                         </div>
                         <div class="row">
                           <div class="specs">{s.format.toUpperCase()} <span>/</span> {s.bitrate} kbps <span>/</span> {s.status.listeners}

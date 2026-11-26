@@ -141,13 +141,37 @@ func (a *App) clock(ctx context.Context) {
 func (a *App) automationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/stations/{slug}/shuffle", a.permit("admin", func(w http.ResponseWriter, r *http.Request, user string) {
 		a.mu.Lock()
-		rot := a.rotate[r.PathValue("slug")]
-		if rot != nil {
-			rot.rank = nil
+		slug := r.PathValue("slug")
+		rot := a.rotate[slug]
+		i := slices.IndexFunc(a.state.Stations, func(s Station) bool { return s.Slug == slug })
+		if rot == nil || i < 0 {
+			a.mu.Unlock()
+			fail(w, 404, "Станица није пронађена.")
+			return
+		}
+		previous := a.upcomingLocked(a.state.Stations[i])
+		rot.rank, rot.upcoming = nil, nil
+		upcoming := a.upcomingLocked(a.state.Stations[i])
+		if len(previous) > 0 && len(upcoming) > 1 && previous[0].ID == upcoming[0].ID {
+			rot.upcoming[0], rot.upcoming[1] = rot.upcoming[1], rot.upcoming[0]
+			upcoming[0], upcoming[1] = upcoming[1], upcoming[0]
 		}
 		a.mu.Unlock()
-		if rot == nil {
+		respond(w, 200, upcoming)
+	}))
+	mux.HandleFunc("POST /api/stations/{slug}/skip", a.permit("admin,dj,editor", func(w http.ResponseWriter, r *http.Request, user string) {
+		var request struct{ Started time.Time }
+		if err := decode(r, &request); err != nil || request.Started.IsZero() {
+			fail(w, 400, "Није изабрана тренутна песма.")
+			return
+		}
+		e := a.engine(r.PathValue("slug"))
+		if e == nil {
 			fail(w, 404, "Станица није пронађена.")
+			return
+		}
+		if !e.skip(request.Started) {
+			fail(w, 409, "Песма се у међувремену променила или прескакање тренутно није доступно.")
 			return
 		}
 		respond(w, 200, true)

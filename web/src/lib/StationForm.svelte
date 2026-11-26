@@ -10,6 +10,9 @@
     ? structuredClone(station)
     : {
         name: '',
+        description: '',
+        owner: '',
+        website: '',
         slug: '',
         bitrate: 128,
         format: 'mp3',
@@ -86,6 +89,17 @@
       <label>Назив
         <input bind:value={draft.name} on:input={suggest} required maxlength="90" placeholder="Моја станица"/>
       </label>
+      <label>Опис станице
+        <textarea bind:value={draft.description} rows="3" maxlength="3000" placeholder="Шта се слуша на овој станици?"></textarea>
+      </label>
+      <div class="formgrid">
+        <label>Власник
+          <input bind:value={draft.owner} maxlength="120" placeholder="Име или организација"/>
+        </label>
+        <label>Сајт станице
+          <input type="url" bind:value={draft.website} maxlength="2048" placeholder="https://radio.example"/>
+        </label>
+      </div>
       <label>Адреса стрима
         <div class="prefix"><span>/stream/</span>
           <input bind:value={draft.slug} required disabled={!!station} pattern="[a-z0-9][a-z0-9\-]*" placeholder="moj-radio"/>

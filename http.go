@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var goodSlug = regexp.MustCompile("^[a-z0-9][a-z0-9-]{0,47}$")
@@ -165,7 +166,8 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 
 type stationView struct {
 	Station
-	Status Status `json:"status"`
+	Status   Status  `json:"status"`
+	Upcoming []Track `json:"upcoming,omitempty"`
 }
 
 func (a *App) coreRoutes(m *http.ServeMux) {
@@ -231,11 +233,11 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 	}))
 	m.HandleFunc("GET /api/dashboard", a.permit("*", func(w http.ResponseWriter, r *http.Request, user string) {
 		_, role := a.identity(r)
-		a.mu.RLock()
-		defer a.mu.RUnlock()
+		a.mu.Lock()
+		defer a.mu.Unlock()
 		list := []stationView{}
 		for _, s := range a.state.Stations {
-			v := stationView{Station: s}
+			v := stationView{Station: s, Upcoming: a.upcomingLocked(s)}
 			if e := a.engines[s.Slug]; e != nil {
 				v.Status = e.snapshot()
 			}
@@ -278,6 +280,20 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 		}
 		if s.Format == "" {
 			s.Format = "mp3"
+		}
+		s.Description = strings.TrimSpace(s.Description)
+		s.Website = strings.TrimSpace(s.Website)
+		s.Owner = strings.TrimSpace(s.Owner)
+		if utf8.RuneCountInString(s.Description) > 3000 || utf8.RuneCountInString(s.Owner) > 120 || len(s.Website) > 2048 {
+			fail(w, 400, "Опис може да има до 3000 знакова, а име власника до 120.")
+			return
+		}
+		if s.Website != "" {
+			address, err := url.Parse(s.Website)
+			if err != nil || (address.Scheme != "http" && address.Scheme != "https") || address.Hostname() == "" {
+				fail(w, 400, "Сајт станице мора да буде важећа http:// или https:// адреса.")
+				return
+			}
 		}
 		if s.Bitrate == 0 {
 			s.Bitrate = 128
@@ -413,7 +429,7 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 					break
 				}
 			}
-			respond(w, 200, stationView{st, status})
+			respond(w, 200, stationView{Station: st, Status: status})
 		case "history":
 			respond(w, 200, a.state.History[slug])
 		case "stats":

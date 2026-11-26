@@ -130,6 +130,9 @@ func TestSimpleModeRotationAndInterrupt(t *testing.T) {
 	if !temporary.Temporary {
 		t.Fatal("bulletin did not play as a temporary track")
 	}
+	if temporary.Duration < 1.2 || temporary.Duration > 1.4 {
+		t.Fatalf("unexpected bulletin duration: %v", temporary.Duration)
+	}
 	until = time.Now().Add(5 * time.Second)
 	for app.engine("zlifm").snapshot().Now.ID == temporary.ID && time.Now().Before(until) {
 		time.Sleep(20 * time.Millisecond)

@@ -843,7 +843,14 @@ audio {
   padding: 24px;
 }
 .listenbody h1 {
-  margin: 18px 0 22px;
+  margin: 0;
+}
+.listenbody > .row {
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.listenbody .now {
+  margin-bottom: 0;
 }
 .listenbody h2 {
   font-size: 21px;

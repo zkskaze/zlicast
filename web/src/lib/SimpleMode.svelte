@@ -1,6 +1,8 @@
 <script>
   import Icon from './Icon.svelte';
   import PlaybackControls from './PlaybackControls.svelte';
+  import StationDetails from './StationDetails.svelte';
+  import TrackProgress from './TrackProgress.svelte';
   import { api, importMedia, permitted } from './api.js';
 
   export let station;
@@ -12,12 +14,15 @@
   export let setVolume;
   export let refresh;
   export let notify;
+  export let editStation;
 
   let every = station.rules.jingleSongs || 0;
   let jingle = station.rules.jingleId || '';
   let news = '';
-  let song = '';
   let songQuery = '';
+  let searchLimit = 12;
+  let mixing = false;
+  let skippedStart = '';
   let busy = '';
   let songsInput;
   let jingleInput;
@@ -27,11 +32,15 @@
 
   $: available = media.filter(m => !m.station || m.station === station.slug);
   $: songs = available.filter(m => m.category === 'music');
-  $: matchingSongs = songs.filter(m => (m.title + ' ' + (m.artist || '')).toLowerCase().includes(songQuery.trim().toLowerCase()));
-  $: if (song && !matchingSongs.some(m => m.id === song)) song = '';
+  $: terms = songQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  $: matchingSongs = terms.length ? songs.filter(m => {
+    const titleAndArtist = (m.title + ' ' + (m.artist || '')).toLowerCase();
+    return terms.every(term => titleAndArtist.includes(term));
+  }) : [];
   $: jingles = available.filter(m => m.category === 'jingles');
   $: bulletins = available.filter(m => ['news', 'emergency', 'shows'].includes(m.category));
   $: canUpload = permitted(role, 'dj', 'editor');
+  $: upcoming = station.upcoming || [];
 
   async function upload(file, category, onProcessing) {
     const form = new FormData();
@@ -103,11 +112,36 @@
     return api('/api/stations/' + station.slug + '/play', 'POST', { id, interrupt: true });
   }
 
-  function playSong() {
+  function playSong(song) {
     withAction('Шаљем песму у етар…', async () => {
       await playNow(song);
       notify('Песма је послата у етар.');
     });
+  }
+
+  async function shuffle() {
+    mixing = true;
+    try {
+      await api('/api/stations/' + station.slug + '/shuffle', 'POST');
+      await refresh();
+      notify('Преостале песме су поново измешане.');
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      mixing = false;
+    }
+  }
+
+  async function skip() {
+    const started = station.status.started;
+    skippedStart = started;
+    try {
+      await api('/api/stations/' + station.slug + '/skip', 'POST', { started });
+      await refresh();
+    } catch (error) {
+      skippedStart = '';
+      notify(error.message);
+    }
   }
 </script>
 
@@ -115,13 +149,60 @@
   <div class="row">
     <div>
       <h2>{station.name}</h2>
-      <small>{station.status.now.title || 'Припрема програма…'}</small>
     </div>
+    {#if role === 'admin'}
+      <button type="button" class="icon" aria-label="Подешавања станице" title="Подешавања станице" on:click={() => editStation(station)}>
+        <Icon name="sliders-horizontal" size={18}/>
+      </button>
+    {/if}
   </div>
+  <StationDetails {station}/>
   <div class="simple-receiver">
-    <PlaybackControls {station} playing={player === station.slug} {listen} {volume} {setVolume}/>
+    <PlaybackControls {station} playing={player === station.slug} {listen} {volume} {setVolume} expanded/>
   </div>
-  {#if canUpload}
+  <div class="now">
+    <div class="audioicon"><Icon name="audio-lines" size={18}/></div>
+    <div class="grow" aria-live="polite">
+      <small>Тренутно свира</small>
+      <b>{station.status.now.title || 'Припрема програма…'}</b>
+      {#if station.status.now.artist}<small>{station.status.now.artist}</small>{/if}
+    </div>
+    {#if canUpload && station.status.now.category === 'music'}
+      <button class="skip" type="button" disabled={skippedStart === station.status.started} on:click={skip}>
+        <Icon name="skip-forward" size={16}/> Прескочи песму
+      </button>
+    {/if}
+  </div>
+  <TrackProgress status={station.status}/>
+</section>
+
+<section class="panel">
+  <div class="row">
+    <h2>Следеће у ротацији</h2>
+    {#if role === 'admin'}
+      <button type="button" disabled={mixing || upcoming.length < 2} on:click={shuffle}>
+        {mixing ? 'Мешам…' : 'Поново измешај'}
+      </button>
+    {/if}
+  </div>
+  {#if upcoming.length}
+    <ol class="upcoming">
+      {#each upcoming as track (track.id)}
+        <li>
+          <span class="title">{track.title}</span>
+          {#if track.artist}<small>{track.artist}</small>{/if}
+        </li>
+      {/each}
+    </ol>
+    <small>Заказане емисије, вести и џинглови могу да се убаце између ових ставки.</small>
+  {:else}
+    <p>Ротација је празна.</p>
+  {/if}
+</section>
+
+{#if canUpload}
+<section class="panel">
+  <h2>Додај песме</h2>
     <button
       class="drop"
       class:drag={dragging}
@@ -143,24 +224,8 @@
         <ul>{#each uploadErrors as error}<li>{error}</li>{/each}</ul>
       </details>
     {/if}
-    {#if songs.length}
-      <form on:submit|preventDefault={playSong}>
-        <label>Претражи песме
-          <input type="search" placeholder="Назив или извођач" bind:value={songQuery}/>
-        </label>
-        <label>Песма у ротацији
-          <select bind:value={song} disabled={!matchingSongs.length}>
-            <option value="">{matchingSongs.length ? 'Изабери песму' : 'Нема песама за ову претрагу'}</option>
-            {#each matchingSongs as item (item.id)}
-              <option value={item.id}>{item.title}{item.artist ? ' · ' + item.artist : ''}</option>
-            {/each}
-          </select>
-        </label>
-        <button disabled={!!busy || !song}><Icon name="play" size={16}/> Пусти песму одмах</button>
-      </form>
-    {/if}
-  {/if}
 </section>
+{/if}
 
 {#if role === 'admin'}
   <section class="panel">
@@ -192,6 +257,7 @@
   </section>
 {/if}
 
+
 {#if canUpload}
   <section class="panel">
     <h2>Вести и обавештења</h2>
@@ -217,4 +283,48 @@
     <input class="hidden" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac" bind:this={newsInput}
       on:change={(event) => pickFile(event, playNews)}/>
   </section>
+  <section class="panel">
+    <h2>Пусти песму одмах</h2>
+    <label>
+      Претражи песме
+      <input type="search" placeholder="Назив песме или извођач" bind:value={songQuery}
+        on:input={() => searchLimit = 12}/>
+    </label>
+    {#if terms.length}
+      {#if matchingSongs.length}
+        <ul class="song-results">
+          {#each matchingSongs.slice(0, searchLimit) as track (track.id)}
+            <li>
+              <div>
+                <span class="title">{track.title}</span>
+                {#if track.artist}<small>{track.artist}</small>{/if}
+              </div>
+              <button type="button" disabled={!!busy} aria-label={'Пусти ' + track.title}
+                on:click={() => playSong(track.id)}><Icon name="play" size={15}/> Пусти</button>
+            </li>
+          {/each}
+        </ul>
+        {#if matchingSongs.length > searchLimit}
+          <button type="button" on:click={() => searchLimit += 12}>Прикажи још</button>
+        {/if}
+      {:else}
+        <p role="status">Нема песама за ову претрагу.</p>
+      {/if}
+    {/if}
+  </section>
 {/if}
+
+<style>
+  .skip { flex-shrink: 0; }
+  .upcoming { padding-left: 26px; margin: 0 0 12px; }
+  .upcoming li { padding: 8px 0 8px 5px; border-bottom: 1px solid var(--edge); }
+  .upcoming li::marker { color: var(--muted); font-family: Consolas, monospace; }
+  .title { font-weight: 650; overflow-wrap: anywhere; }
+  .song-results { list-style: none; padding: 0; margin: 0 0 12px; }
+  .song-results li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--edge); }
+  .song-results button { flex-shrink: 0; }
+  @media (max-width: 420px) {
+    .now { flex-wrap: wrap; }
+    .now .skip { margin-left: auto; }
+  }
+</style>

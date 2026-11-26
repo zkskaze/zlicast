@@ -8,17 +8,19 @@
   export let volume;
   export let setVolume;
   export let publicPage = false;
+  export let expanded = false;
 
   $: playLabel = playing
     ? 'Заустави слушање'
     : publicPage ? 'Слушај уживо' : 'Слушај';
 </script>
 
-<div class="receiver" style:--station-ink={station.color || 'var(--accent)'}>
+<div class="receiver" class:expanded style:--station-ink={station.color || 'var(--accent)'}>
   <div class="rail">
     <button class="play" class:playing type="button" title={playLabel} aria-label={playLabel}
       on:click={() => listen(station)}>
       <Icon name={playing ? 'pause' : 'play'} size={18}/>
+      {#if expanded}<span>{playLabel}</span>{/if}
     </button>
 
     <label class="level">
@@ -60,6 +62,14 @@
   }
   .play:hover {
     background: #f2f7e6;
+  }
+  .expanded .rail { padding: 12px; gap: 14px; }
+  .expanded .play {
+    width: auto;
+    min-height: 48px;
+    height: auto;
+    padding: 0 14px;
+    white-space: nowrap;
   }
   .play.playing {
     color: var(--signal);
@@ -132,5 +142,18 @@
       grid-column: 2;
       justify-self: end;
     }
+  }
+  @container (max-width: 445px) {
+    .expanded .rail {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px 12px;
+    }
+    .expanded .play { justify-self: start; }
+    .expanded .level { grid-column: 1 / -1; grid-row: 2; }
+    .expanded .rail :global(.playlist-links) { grid-column: 2; grid-row: 1; }
+  }
+  @container (max-width: 258px) {
+    .expanded .play { padding-inline: 8px; }
+    .expanded .play span { display: none; }
   }
 </style>
