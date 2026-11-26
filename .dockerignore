@@ -5,6 +5,6 @@ tmp
 dist
 web/node_modules
 web/.svelte-kit
-zlicast.exe
+*.exe
 *.bundle
 

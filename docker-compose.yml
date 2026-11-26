@@ -7,7 +7,9 @@ services:
     ports:
       - "1907:8080"
     volumes:
-      - ./data:/data
+      - type: bind
+        source: ./data
+        target: /data
     environment:
       TZ: Europe/Belgrade
       ADMIN_USER: ${ADMIN_USER:-admin}

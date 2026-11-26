@@ -28,6 +28,8 @@ Self-hosted радио за ZKS. Локални Windows EXE треба да ем
 | Администрација | Fallback, откривање тишине и опоравак, hot reload, health API, backup/restore, улоге admin/DJ/editor/viewer, audit, webhooks за Gotify/Discord, API токени. |
 | Испорука | Go, SvelteKit, FFmpeg, SQLite, локални .env, WebSocket/WebRTC за студио, један Docker контејнер, GHCR AMD64/ARM64, GitHub Actions. |
 
+Docker слика не декларише `VOLUME`. `docker-compose.yml` монтира `./data/` поред Compose фајла на `/data` преко bind mount-а и поставља `pull_policy: always`.
+
 Редослед испоруке је Core → Automation → Studio → Production. Проверено стање је у PROGRESS.md и TESTING.md.
 
 

@@ -57,7 +57,9 @@ FFmpeg и FFprobe морају бити у PATH-у. На рачунару на �
 
 Спакован WebUI је у `web/build`. За поновну изградњу истог EXE довољни су Go и команда `go build -trimpath -o zlicast.exe .`. За рад на интерфејсу у `web` покрени `npm install` и `npm run build`, па понови Go build. Извори SvelteKit-а су у `web/src`, лиценце за Lucide и Manrope у `web/static/licenses`. За тестове користи `go test -race ./...`. На Linux-у су за изградњу потребни C компајлер и SQLite развојни пакет.
 
-`compose.yml` користи `pull_policy: always` и `ghcr.io/zkskaze/zlicast:latest`. Објаву слике покреће GitHub Actions на одговарајућем репозиторијуму. За локалну изградњу пробног контејнера користи `docker build -t zlicast:local .`. Не покрећи два сервера над истим директоријумом података.
+`docker-compose.yml` користи `ghcr.io/zkskaze/zlicast:latest` са `pull_policy: always`. Постави `.env` поред Compose фајла, упиши `ADMIN_PASSWORD` и покрени `docker compose up -d`. SQLite, медији, снимци и остали трајни подаци иду у `./data/` поред Compose фајла преко bind mount-а. За приватну слику прво пријави Docker на GHCR.
+
+GitHub Actions објављује слику за Linux AMD64 и ARM64 после push-а на `main` или ознаке `v*`. Изградња може и ручно да се покрене са главне гране. За локалну пробну слику користи `docker build -t zlicast:local .`. Не покрећи два сервера над истим директоријумом података.
 
 One container. Endless frequencies.
 

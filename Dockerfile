@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak-n
 WORKDIR /opt/zlicast
 COPY --from=backend /out/zlicast /opt/zlicast/zlicast
 ENV TZ=Europe/Belgrade ZLICAST_ADDR=:8080 ZLICAST_DATA=/data
-VOLUME ["/data"]
 EXPOSE 8080
 ENTRYPOINT ["/opt/zlicast/zlicast"]
 
