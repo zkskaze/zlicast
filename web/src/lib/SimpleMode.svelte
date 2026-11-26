@@ -1,5 +1,7 @@
 <script>
   import Icon from './Icon.svelte';
+  import VolumeControl from './VolumeControl.svelte';
+  import PlaylistLinks from './PlaylistLinks.svelte';
   import { api, permitted } from './api.js';
 
   export let station;
@@ -7,6 +9,8 @@
   export let role;
   export let player;
   export let listen;
+  export let volume;
+  export let setVolume;
   export let refresh;
   export let notify;
 
@@ -105,10 +109,14 @@
       <h2>{station.name}</h2>
       <small>{station.status.now.title || 'Припрема програма…'}</small>
     </div>
-    <button type="button" class="primary" on:click={() => listen(station)}>
-      <Icon name={player === station.slug ? 'pause' : 'play'} size={16}/>
-      {player === station.slug ? 'Заустави слушање' : 'Слушај'}
-    </button>
+    <div class="controls">
+      <button type="button" class="primary" on:click={() => listen(station)}>
+        <Icon name={player === station.slug ? 'pause' : 'play'} size={16}/>
+        {player === station.slug ? 'Заустави слушање' : 'Слушај'}
+      </button>
+      <VolumeControl {volume} {setVolume}/>
+      <PlaylistLinks slug={station.slug} {notify}/>
+    </div>
   </div>
   {#if canUpload}
     <button

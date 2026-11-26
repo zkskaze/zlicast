@@ -10,6 +10,8 @@
   import Admin from '$lib/Admin.svelte';
   import Stats from '$lib/Stats.svelte';
   import SimpleMode from '$lib/SimpleMode.svelte';
+  import VolumeControl from '$lib/VolumeControl.svelte';
+  import PlaylistLinks from '$lib/PlaylistLinks.svelte';
   import { openRadioPlayer } from '$lib/radio-player.js';
   import { api, cats, duration, permitted } from '$lib/api.js';
   let mode = 'loading',
@@ -27,6 +29,7 @@
     publicError = '',
     history = [],
     player = '',
+    volume = 100,
     simpleStation = '',
     playback,
     toastTimer,
@@ -74,6 +77,12 @@
     }
   }
   onMount(() => {
+    try {
+      const saved = localStorage.getItem('zlicast-volume');
+      if (saved !== null && Number.isInteger(Number(saved)) && Number(saved) >= 0 && Number(saved) <= 100) {
+        volume = Number(saved);
+      }
+    } catch { /* The slider still works when storage is unavailable. */ }
     publicSlug = location.pathname.match(/^\/listen\/([^/]+)$/)?.[1] || '';
     if (publicSlug) {
       mode = 'public';
@@ -122,6 +131,13 @@
     playback = null;
     player = '';
   }
+  function setVolume(value) {
+    volume = value;
+    playback?.setVolume(volume / 100);
+    try {
+      localStorage.setItem('zlicast-volume', String(volume));
+    } catch { /* Playback does not require persistent storage. */ }
+  }
   function listen(s) {
     if (player === s.slug) {
       endListen();
@@ -132,7 +148,7 @@
     playback = openRadioPlayer(s, message => {
       endListen();
       notify(message);
-    });
+    }, volume / 100);
     playback.start();
   }
   $: title = nav.find((n) => n[0] === view)?.[2] || 'Контролна соба';
@@ -193,9 +209,8 @@
                 <button class="primary" on:click={()=>listen(pub)}>
                   <Icon name={player?'pause':'play'}/>{player?'Заустави':'Слушај уживо'}
                 </button>
-                <a class="btn" href={'/listen/'+pub.slug+'.m3u'} download={pub.slug+'.m3u'} data-sveltekit-reload>Преузми M3U
-                  <Icon name="download"/>
-                </a>
+                <VolumeControl {volume} {setVolume}/>
+                <PlaylistLinks slug={pub.slug} {notify}/>
               </div>
             </div>
           </section>
@@ -259,7 +274,7 @@
                     </select>
                   </label>
                   {#key quickStation.slug}
-                    <SimpleMode station={quickStation} media={data.media} role={data.role} {player} {listen} {refresh} {notify}/>
+                    <SimpleMode station={quickStation} media={data.media} role={data.role} {player} {listen} {volume} {setVolume} {refresh} {notify}/>
                   {/key}
                 {:else}
                   <p>Додај станицу да почнеш емитовање.</p>
@@ -273,7 +288,8 @@
                     </div>{/each}
                 </div>
                 <div class="sectionhead">
-                  <h2>Радио-станице</h2><span class="mono">FM / IP</span>
+                  <h2>Радио-станице</h2>
+                  <VolumeControl {volume} {setVolume}/>
                 </div>
                 <div class="stations">
                   {#each data.stations as s}
@@ -306,6 +322,7 @@
                         <Icon name="sliders-horizontal"/>
                         </button>{/if}
                         </div>
+                        <PlaylistLinks slug={s.slug} {notify}/>
                       </div>
                     </article>{:else}
                     <p>Додај прву станицу да покренеш емитовање.</p>{/each}

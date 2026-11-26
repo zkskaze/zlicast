@@ -26,9 +26,18 @@ func TestBrowserPCMAndM3UShareLiveAudio(t *testing.T) {
 	}
 	data, err := io.ReadAll(playlist.Body)
 	playlist.Body.Close()
-	if err != nil || playlist.StatusCode != 200 ||
-		!strings.Contains(playlist.Header.Get("Content-Disposition"), "zlifm.m3u") {
+	if err != nil || playlist.StatusCode != 200 || playlist.Header.Get("Content-Disposition") != "" {
 		t.Fatalf("playlist: %s, %s, %v", playlist.Status, playlist.Header, err)
+	}
+	download, err := client.Get("http://radio.local/listen/zlifm.m3u?download=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloaded, err := io.ReadAll(download.Body)
+	download.Body.Close()
+	if err != nil || download.StatusCode != 200 || !bytes.Equal(data, downloaded) ||
+		download.Header.Get("Content-Disposition") != `attachment; filename="zlifm.m3u"` {
+		t.Fatalf("playlist download: %s, %s, %v", download.Status, download.Header, err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\r\n")
 	if len(lines) != 3 || lines[0] != "#EXTM3U" || lines[1] != "#EXTINF:-1,ZliFM" ||

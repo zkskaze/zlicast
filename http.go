@@ -381,7 +381,9 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 			}
 			w.Header().Set("Content-Type", "audio/x-mpegurl")
 			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", slug+".m3u"))
+			if r.URL.Query().Get("download") == "1" {
+				w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", slug+".m3u"))
+			}
 			config := e.getConfig()
 			address := url.URL{Scheme: scheme, Host: r.Host, Path: "/stream/" + slug + "." + config.Format}
 			name := strings.NewReplacer("\r", " ", "\n", " ").Replace(config.Name)

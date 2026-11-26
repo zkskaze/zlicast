@@ -2,10 +2,12 @@ const sampleRate = 48000;
 const framesPerBuffer = 7680;
 const bytesPerFrame = 4; // Two signed little-endian 16-bit channels.
 
-export function openRadioPlayer(station, failed) {
+export function openRadioPlayer(station, failed, initialVolume = 1) {
   const controller = new AbortController();
   const { signal } = controller;
   let context;
+  let gain;
+  let volume = initialVolume;
   let startupTimer;
 
   function close() {
@@ -23,6 +25,9 @@ export function openRadioPlayer(station, failed) {
 
   async function play() {
     context = new AudioContext();
+    gain = context.createGain();
+    gain.gain.value = volume;
+    gain.connect(context.destination);
     // Resume synchronously from the user's click before waiting for the network.
     await context.resume();
     signal.throwIfAborted();
@@ -60,7 +65,7 @@ export function openRadioPlayer(station, failed) {
       }
       const source = context.createBufferSource();
       source.buffer = buffer;
-      source.connect(context.destination);
+      source.connect(gain);
       source.onended = () => source.disconnect();
       source.start(nextAt);
       nextAt += buffer.duration;
@@ -90,6 +95,12 @@ export function openRadioPlayer(station, failed) {
 
   return {
     close,
+    setVolume(level) {
+      volume = level;
+      if (gain && !signal.aborted) {
+        gain.gain.setTargetAtTime(volume, context.currentTime, 0.01);
+      }
+    },
     start() {
       if (!globalThis.AudioContext) {
         report('Овај прегледач не подржава Web Audio. Станицу можеш отворити преко M3U плејлисте.');
