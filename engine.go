@@ -55,29 +55,30 @@ type liveFeed struct {
 	stop  chan struct{}
 }
 type Engine struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	done          chan struct{}
-	mu            sync.Mutex
-	config        ProgramConfig
-	status        Status
-	subscribers   map[chan []byte]time.Time
-	recentFrames  [startupFrames][]byte
-	recentIndex   int
-	totalListen   time.Duration
-	sessions      int
-	cues          chan cue
-	live          *liveFeed
-	hlsDir        string
-	encoderCancel context.CancelFunc
-	lastFrame     time.Time
-	next          func() Track
-	played        func(Track)
+	ctx            context.Context
+	cancel         context.CancelFunc
+	done           chan struct{}
+	mu             sync.Mutex
+	config         ProgramConfig
+	status         Status
+	subscribers    map[chan []byte]time.Time
+	pcmSubscribers map[chan []byte]time.Time
+	recentFrames   [startupFrames][]byte
+	recentIndex    int
+	totalListen    time.Duration
+	sessions       int
+	cues           chan cue
+	live           *liveFeed
+	hlsDir         string
+	encoderCancel  context.CancelFunc
+	lastFrame      time.Time
+	next           func() Track
+	played         func(Track)
 }
 
 func newEngine(c ProgramConfig, next func() Track, played func(Track)) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{ctx: ctx, cancel: cancel, done: make(chan struct{}), config: c, next: next, played: played, cues: make(chan cue, 32), subscribers: map[chan []byte]time.Time{}}
+	e := &Engine{ctx: ctx, cancel: cancel, done: make(chan struct{}), config: c, next: next, played: played, cues: make(chan cue, 32), subscribers: map[chan []byte]time.Time{}, pcmSubscribers: map[chan []byte]time.Time{}}
 	go e.run()
 	return e
 }
@@ -86,9 +87,12 @@ func (e *Engine) snapshot() Status {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := e.status
-	s.Listeners = len(e.subscribers)
+	s.Listeners = len(e.subscribers) + len(e.pcmSubscribers)
 	d := e.totalListen
 	for _, at := range e.subscribers {
+		d += time.Since(at)
+	}
+	for _, at := range e.pcmSubscribers {
 		d += time.Since(at)
 	}
 	if n := e.sessions + s.Listeners; n > 0 {
@@ -341,16 +345,7 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 			e.lastFrame = time.Now()
 			e.recentFrames[e.recentIndex] = b
 			e.recentIndex = (e.recentIndex + 1) % startupFrames
-			for sub, at := range e.subscribers {
-				select {
-				case sub <- b:
-				default:
-					close(sub)
-					delete(e.subscribers, sub)
-					e.totalListen += time.Since(at)
-					e.sessions++
-				}
-			}
+			e.publishLocked(e.subscribers, b)
 			e.mu.Unlock()
 		}
 	}()
@@ -496,6 +491,9 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 		}
 		e.mu.Lock()
 		e.status.Level = float64(peak) / 32768
+		if len(e.pcmSubscribers) > 0 {
+			e.publishLocked(e.pcmSubscribers, append([]byte(nil), b...))
+		}
 		e.mu.Unlock()
 		if _, err = stdin.Write(b); err != nil {
 			return err
@@ -525,25 +523,48 @@ func encodedFrame(r *bufio.Reader, format string) ([]byte, error) {
 	}
 }
 func (e *Engine) stream(w http.ResponseWriter, r *http.Request) {
+	e.serveAudio(w, r, false)
+}
+
+func (e *Engine) publishLocked(subscribers map[chan []byte]time.Time, audio []byte) {
+	for sub, at := range subscribers {
+		select {
+		case sub <- audio:
+		default:
+			close(sub)
+			delete(subscribers, sub)
+			e.totalListen += time.Since(at)
+			e.sessions++
+		}
+	}
+}
+
+func (e *Engine) serveAudio(w http.ResponseWriter, r *http.Request, pcm bool) {
 	sub := make(chan []byte, 96)
 	e.mu.Lock()
 	c := e.config
+	subscribers := e.subscribers
+	if pcm {
+		subscribers = e.pcmSubscribers
+	}
 	if r.Method != http.MethodHead {
-		for i := range startupFrames {
-			if b := e.recentFrames[(e.recentIndex+i)%startupFrames]; b != nil {
-				sub <- b
+		if !pcm {
+			for i := range startupFrames {
+				if b := e.recentFrames[(e.recentIndex+i)%startupFrames]; b != nil {
+					sub <- b
+				}
 			}
 		}
-		e.subscribers[sub] = time.Now()
-		e.status.Peak = max(e.status.Peak, len(e.subscribers))
+		subscribers[sub] = time.Now()
+		e.status.Peak = max(e.status.Peak, len(e.subscribers)+len(e.pcmSubscribers))
 	}
 	e.mu.Unlock()
 	defer func() {
 		e.mu.Lock()
-		if at, ok := e.subscribers[sub]; ok {
+		if at, ok := subscribers[sub]; ok {
 			e.totalListen += time.Since(at)
 			e.sessions++
-			delete(e.subscribers, sub)
+			delete(subscribers, sub)
 		}
 		e.mu.Unlock()
 	}()
@@ -551,12 +572,17 @@ func (e *Engine) stream(w http.ResponseWriter, r *http.Request) {
 	if c.Format == "aac" {
 		typ = "audio/aac"
 	}
+	if pcm {
+		typ = "application/octet-stream"
+	}
 	w.Header().Set("Content-Type", typ)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("icy-name", c.Name)
-	w.Header().Set("icy-br", fmt.Sprint(c.Bitrate))
-	icy := r.Header.Get("Icy-MetaData") == "1"
+	if !pcm {
+		w.Header().Set("icy-name", c.Name)
+		w.Header().Set("icy-br", fmt.Sprint(c.Bitrate))
+	}
+	icy := !pcm && r.Header.Get("Icy-MetaData") == "1"
 	const interval = 16384
 	if icy {
 		w.Header().Set("icy-metaint", "16384")

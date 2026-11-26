@@ -347,16 +347,30 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 		result(w, err)
 	}))
 	m.HandleFunc("GET /stream/{slug}", func(w http.ResponseWriter, r *http.Request) {
-		e := a.engine(r.PathValue("slug"))
+		slug, extension, _ := strings.Cut(r.PathValue("slug"), ".")
+		e := a.engine(slug)
 		if e == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if extension != "" && extension != e.getConfig().Format {
 			http.NotFound(w, r)
 			return
 		}
 		e.stream(w, r)
 	})
+	m.HandleFunc("GET /stream/{slug}/pcm", func(w http.ResponseWriter, r *http.Request) {
+		e := a.engine(r.PathValue("slug"))
+		if e == nil {
+			http.NotFound(w, r)
+			return
+		}
+		e.serveAudio(w, r, true)
+	})
 	m.HandleFunc("GET /listen/{slug}", func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSuffix(r.PathValue("slug"), ".m3u")
-		if a.engine(slug) == nil {
+		e := a.engine(slug)
+		if e == nil {
 			http.NotFound(w, r)
 			return
 		}
@@ -366,7 +380,12 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 				scheme = "https"
 			}
 			w.Header().Set("Content-Type", "audio/x-mpegurl")
-			fmt.Fprintf(w, "#EXTM3U\n%s://%s/stream/%s\n", scheme, r.Host, slug)
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", slug+".m3u"))
+			config := e.getConfig()
+			address := url.URL{Scheme: scheme, Host: r.Host, Path: "/stream/" + slug + "." + config.Format}
+			name := strings.NewReplacer("\r", " ", "\n", " ").Replace(config.Name)
+			fmt.Fprintf(w, "#EXTM3U\r\n#EXTINF:-1,%s\r\n%s\r\n", name, address.String())
 			return
 		}
 		b, _ := assets.ReadFile("web/build/index.html")

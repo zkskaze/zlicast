@@ -193,7 +193,7 @@
                 <button class="primary" on:click={()=>listen(pub)}>
                   <Icon name={player?'pause':'play'}/>{player?'Заустави':'Слушај уживо'}
                 </button>
-                <a class="btn" href={'/listen/'+pub.slug+'.m3u'}>M3U
+                <a class="btn" href={'/listen/'+pub.slug+'.m3u'} download={pub.slug+'.m3u'} data-sveltekit-reload>Преузми M3U
                   <Icon name="download"/>
                 </a>
               </div>
