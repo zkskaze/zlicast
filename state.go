@@ -102,8 +102,9 @@ type State struct {
 	Hooks     []Hook
 }
 type session struct {
-	user    string
-	expires time.Time
+	User    string
+	Expires time.Time
+	Tag     string
 }
 type rotation struct {
 	songs      int
@@ -146,11 +147,11 @@ func newApp(data, user, password, source string, loc *time.Location) (*App, erro
 		return nil, err
 	}
 	a := &App{db: db, data: data, user: user, password: password, source: source, loc: loc, engines: map[string]*Engine{}, rotate: map[string]*rotation{}, sessions: map[string]session{}, attempts: map[string][]time.Time{}, started: time.Now()}
-	if err = db.exec("PRAGMA busy_timeout=2000; PRAGMA locking_mode=EXCLUSIVE; CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY,body TEXT NOT NULL)"); err != nil {
+	if err = db.exec("PRAGMA busy_timeout=2000; PRAGMA locking_mode=EXCLUSIVE; CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS browser_sessions(id INTEGER PRIMARY KEY,body TEXT NOT NULL)"); err != nil {
 		db.close()
 		return nil, err
 	}
-	b, err := db.read()
+	b, err := db.read("SELECT body FROM config WHERE id=1")
 	if err == nil {
 		if len(b) > 0 {
 			err = json.Unmarshal(b, &a.state)
@@ -166,7 +167,22 @@ func newApp(data, user, password, source string, loc *time.Location) (*App, erro
 		db.close()
 		return nil, err
 	}
+	sessions, err := db.read("SELECT body FROM browser_sessions WHERE id=1")
+	if err == nil && len(sessions) > 0 {
+		err = json.Unmarshal(sessions, &a.sessions)
+	}
+	if err != nil {
+		db.close()
+		return nil, err
+	}
 	return a, nil
+}
+func (a *App) saveSessionsLocked() error {
+	body, err := json.Marshal(a.sessions)
+	if err != nil {
+		return err
+	}
+	return a.db.exec("INSERT OR REPLACE INTO browser_sessions(id,body) VALUES(1,'" + strings.ReplaceAll(string(body), "'", "''") + "')")
 }
 func (a *App) saveLocked() error {
 	b, e := json.Marshal(a.state)

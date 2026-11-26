@@ -102,10 +102,11 @@ func (a *App) adminRoutes(m *http.ServeMux) {
 		if err == nil && kind == "users" {
 			a.mu.Lock()
 			for k, v := range a.sessions {
-				if v.user == id {
+				if v.User == id {
 					delete(a.sessions, k)
 				}
 			}
+			err = a.saveSessionsLocked()
 			a.mu.Unlock()
 		}
 		result(w, err)

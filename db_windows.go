@@ -68,8 +68,11 @@ func (d *database) exec(q string) error {
 	}
 	return nil
 }
-func (d *database) read() (b []byte, err error) {
-	p, _ := syscall.BytePtrFromString("SELECT body FROM config WHERE id=1")
+func (d *database) read(query string) (b []byte, err error) {
+	p, err := syscall.BytePtrFromString(query)
+	if err != nil {
+		return nil, err
+	}
 	var stmt uintptr
 	rc, _, _ := prepSQL.Call(d.h, uintptr(unsafe.Pointer(p)), ^uintptr(0), uintptr(unsafe.Pointer(&stmt)), 0)
 	runtime.KeepAlive(p)

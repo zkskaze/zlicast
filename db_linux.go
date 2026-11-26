@@ -35,8 +35,8 @@ func (d *database) exec(q string) error {
 	}
 	return nil
 }
-func (d *database) read() ([]byte, error) {
-	q := C.CString("SELECT body FROM config WHERE id=1")
+func (d *database) read(query string) ([]byte, error) {
+	q := C.CString(query)
 	defer C.free(unsafe.Pointer(q))
 	var s *C.sqlite3_stmt
 	if C.sqlite3_prepare_v2(d.h, q, -1, &s, nil) != C.SQLITE_OK {

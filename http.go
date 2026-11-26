@@ -1,11 +1,13 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/pbkdf2"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -34,6 +36,27 @@ func passHash(s, salt string) string {
 	b, _ := pbkdf2.Key(sha256.New, s, []byte(salt), 150000, 32)
 	return hex.EncodeToString(b)
 }
+
+const browserSessionTTL = 30 * 24 * time.Hour
+
+func sessionTag(token, credential string) string {
+	sum := hmac.New(sha256.New, []byte(token))
+	sum.Write([]byte(credential))
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
+func (a *App) accountLocked(name string) (role, credential string) {
+	if name == a.user {
+		return "admin", "admin\x00" + a.password
+	}
+	for _, u := range a.state.Accounts {
+		if u.Name == name {
+			return u.Role, "account\x00" + u.Hash
+		}
+	}
+	return "", ""
+}
+
 func (a *App) identity(r *http.Request) (string, string) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -50,19 +73,15 @@ func (a *App) identity(r *http.Request) (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	s, ok := a.sessions[c.Value]
-	if !ok || s.expires.Before(time.Now()) {
+	s, ok := a.sessions[tokenHash(c.Value)]
+	if !ok || !s.Expires.After(time.Now()) {
 		return "", ""
 	}
-	if s.user == a.user {
-		return s.user, "admin"
+	role, credential := a.accountLocked(s.User)
+	if role == "" || !equal(s.Tag, sessionTag(c.Value, credential)) {
+		return "", ""
 	}
-	for _, u := range a.state.Accounts {
-		if u.Name == s.user {
-			return s.user, u.Role
-		}
-	}
-	return "", ""
+	return s.User, role
 }
 
 type endpoint func(http.ResponseWriter, *http.Request, string)
@@ -99,33 +118,49 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	a.attempts[ip] = append(times, now)
 	accounts := slices.Clone(a.state.Accounts)
 	a.mu.Unlock()
-	role := ""
+	credential := ""
 	if equal(v.User, a.user) && equal(v.Password, a.password) {
-		role = "admin"
+		credential = "admin\x00" + a.password
 	} else {
 		for _, u := range accounts {
 			if equal(u.Name, v.User) && equal(u.Hash, passHash(v.Password, u.Salt)) {
-				role = u.Role
+				credential = "account\x00" + u.Hash
 				break
 			}
 		}
 	}
-	if role == "" {
+	if credential == "" {
 		fail(w, 401, "Погрешно корисничко име или лозинка.")
 		return
 	}
 	id := randomID() + randomID()
 	a.mu.Lock()
+	currentRole, currentCredential := a.accountLocked(v.User)
+	if currentRole == "" || !equal(credential, currentCredential) {
+		a.mu.Unlock()
+		fail(w, 401, "Пријава више није важећа.")
+		return
+	}
+	previous := maps.Clone(a.sessions)
 	for k, s := range a.sessions {
-		if s.expires.Before(now) {
+		if !s.Expires.After(now) {
 			delete(a.sessions, k)
 		}
 	}
-	a.sessions[id] = session{v.User, now.Add(18 * time.Hour)}
+	if cookie, err := r.Cookie("zlicast"); err == nil {
+		delete(a.sessions, tokenHash(cookie.Value))
+	}
+	a.sessions[tokenHash(id)] = session{v.User, now.Add(browserSessionTTL), sessionTag(id, credential)}
+	if err := a.saveSessionsLocked(); err != nil {
+		a.sessions = previous
+		a.mu.Unlock()
+		fail(w, 500, "Пријаву тренутно није могуће сачувати.")
+		return
+	}
 	delete(a.attempts, ip)
 	a.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "zlicast", Value: id, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 64800})
-	respond(w, 200, map[string]string{"user": v.User, "role": role})
+	http.SetCookie(w, &http.Cookie{Name: "zlicast", Value: id, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(browserSessionTTL.Seconds()), Expires: now.Add(browserSessionTTL)})
+	respond(w, 200, map[string]string{"user": v.User, "role": currentRole})
 }
 
 type stationView struct {
@@ -175,7 +210,16 @@ func (a *App) coreRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/logout", func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie("zlicast"); err == nil {
 			a.mu.Lock()
-			delete(a.sessions, c.Value)
+			key := tokenHash(c.Value)
+			if s, ok := a.sessions[key]; ok {
+				delete(a.sessions, key)
+				if err := a.saveSessionsLocked(); err != nil {
+					a.sessions[key] = s
+					a.mu.Unlock()
+					fail(w, 500, "Одјаву тренутно није могуће сачувати.")
+					return
+				}
+			}
 			a.mu.Unlock()
 		}
 		http.SetCookie(w, &http.Cookie{Name: "zlicast", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
