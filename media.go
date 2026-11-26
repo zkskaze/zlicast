@@ -21,6 +21,16 @@ var categories = []string{"music", "jingles", "news", "ads", "shows", "emergency
 
 const uploadLimit int64 = 512 << 20
 
+var audioInputFlags = []string{"-v", "error", "-protocol_whitelist", "file,pipe", "-format_whitelist", "mp3,flac,wav,ogg,mov,matroska,webm,aac,asf,aiff"}
+
+func normalizeAudio(ctx context.Context, raw, wav string) error {
+	args := append(slices.Clone(audioInputFlags), "-nostdin", "-y", "-i", raw, "-map", "0:a:0", "-vn", "-t", "14400", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-map_metadata", "-1", wav)
+	if err := exec.CommandContext(ctx, "ffmpeg", args...).Run(); err != nil {
+		return bad("Обрада звука није успела. Провери фајл и слободан простор.")
+	}
+	return nil
+}
+
 type probeInfo struct {
 	Format struct {
 		Duration string
@@ -81,7 +91,7 @@ func (a *App) addMedia(ctx context.Context, user string, src io.Reader, filename
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
-	opts := []string{"-v", "error", "-protocol_whitelist", "file,pipe", "-format_whitelist", "mp3,flac,wav,ogg,mov,matroska,webm,aac,asf,aiff"}
+	opts := audioInputFlags
 	args := append(slices.Clone(opts), "-show_entries", "format=duration:format_tags=title,artist:stream=codec_type:stream_disposition=attached_pic", "-of", "json", raw)
 	out, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
 	if err != nil {
@@ -129,9 +139,8 @@ func (a *App) addMedia(ctx context.Context, user string, src io.Reader, filename
 	path := a.mediaPath(m)
 	if _, err = os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		wav := filepath.Join(work, "normalized.wav")
-		args = append(slices.Clone(opts), "-nostdin", "-i", raw, "-map", "0:a:0", "-vn", "-t", "14400", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-map_metadata", "-1", wav)
-		if err = exec.CommandContext(ctx, "ffmpeg", args...).Run(); err != nil {
-			return m, false, bad("Обрада звука није успела. Провери фајл и слободан простор.")
+		if err = normalizeAudio(ctx, raw, wav); err != nil {
+			return m, false, err
 		}
 		if err = os.Rename(wav, path); err != nil {
 			return m, false, err
@@ -182,7 +191,75 @@ func (a *App) addMedia(ctx context.Context, user string, src io.Reader, filename
 	}
 	return m, false, err
 }
+
+func (a *App) playBulletin(w http.ResponseWriter, r *http.Request, user string) {
+	e := a.engine(r.PathValue("slug"))
+	if e == nil {
+		fail(w, 404, "Станица није пронађена.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, uploadLimit+(1<<20))
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		fail(w, 400, "Неисправна или превелика датотека.")
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		fail(w, 400, "Изабери фајл.")
+		return
+	}
+	defer file.Close()
+	work, err := os.MkdirTemp("", "zlicast-bulletin-input-")
+	if err != nil {
+		fail(w, 500, "Није могуће припремити снимак.")
+		return
+	}
+	defer os.RemoveAll(work)
+	raw := filepath.Join(work, "input")
+	target, err := os.Create(raw)
+	if err != nil {
+		fail(w, 500, "Није могуће припремити снимак.")
+		return
+	}
+	n, err := io.Copy(target, io.LimitReader(file, uploadLimit+1))
+	closeErr := target.Close()
+	if err != nil || closeErr != nil || n == 0 || n > uploadLimit {
+		fail(w, 400, "Неисправна или превелика датотека.")
+		return
+	}
+	wav, err := os.CreateTemp("", "zlicast-bulletin-*.wav")
+	if err != nil {
+		fail(w, 500, "Није могуће припремити снимак.")
+		return
+	}
+	wav.Close()
+	temporary := Track{ID: randomID(), Title: strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)), Category: "news", Path: wav.Name(), Temporary: true}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
+	defer cancel()
+	if err = normalizeAudio(ctx, raw, wav.Name()); err != nil {
+		temporary.discard()
+		fail(w, 400, err.Error())
+		return
+	}
+	d, err := openDeck(Track{Path: wav.Name()})
+	if err != nil {
+		temporary.discard()
+		fail(w, 400, "Снимак нема звук за емитовање.")
+		return
+	}
+	temporary.Duration = float64(d.total) / 192000
+	d.close()
+	if !e.queue([]Track{temporary}, true) {
+		temporary.discard()
+		fail(w, 409, "Станица тренутно не прима снимке.")
+		return
+	}
+	respond(w, 200, true)
+}
+
 func (a *App) mediaRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/stations/{slug}/bulletin", a.permit("admin,editor,dj", a.playBulletin))
 	mux.HandleFunc("POST /api/media", a.permit("admin,editor,dj", func(w http.ResponseWriter, r *http.Request, user string) {
 		r.Body = http.MaxBytesReader(w, r.Body, uploadLimit+(1<<20))
 		if err := r.ParseMultipartForm(4 << 20); err != nil {
@@ -225,29 +302,64 @@ func (a *App) mediaRoutes(mux *http.ServeMux) {
 		http.ServeFile(w, r, path)
 	}))
 	mux.HandleFunc("DELETE /api/media/{id}", a.permit("admin,editor", func(w http.ResponseWriter, r *http.Request, user string) {
-		a.uploadMu.Lock()
-		defer a.uploadMu.Unlock()
-		var discarded Media
-		id := r.PathValue("id")
-		err := a.change(user, "Уклоњен снимак", func(s *State) error {
-			m, ok := findMedia(s, id)
-			if !ok {
-				return bad("Непознат снимак.")
-			}
-			s.Media = slices.DeleteFunc(s.Media, func(m Media) bool { return m.ID == id })
-			for i := range s.Playlists {
-				s.Playlists[i].Tracks = slices.DeleteFunc(s.Playlists[i].Tracks, func(v string) bool { return v == id })
-			}
-			s.Events = slices.DeleteFunc(s.Events, func(e Event) bool { return e.Target == "track" && e.Value == id })
-			if !slices.ContainsFunc(s.Media, func(v Media) bool { return v.Hash == m.Hash }) {
-				discarded = m
-			}
-			return nil
-		})
-		if err == nil && discarded.ID != "" {
-			os.Remove(a.mediaPath(discarded))
-			os.Remove(filepath.Join(a.data, "media", discarded.Hash+".jpg"))
-		}
+		_, err := a.deleteMedia(user, []string{r.PathValue("id")})
 		result(w, err)
 	}))
+	mux.HandleFunc("POST /api/media/bulk-delete", a.permit("admin,editor", func(w http.ResponseWriter, r *http.Request, user string) {
+		var form struct{ IDs []string }
+		if err := decode(r, &form); err != nil || len(form.IDs) == 0 || len(form.IDs) > 5000 {
+			fail(w, 400, "Изабери од 1 до 5000 снимака.")
+			return
+		}
+		n, err := a.deleteMedia(user, form.IDs)
+		if err != nil {
+			result(w, err)
+			return
+		}
+		respond(w, 200, map[string]int{"deleted": n})
+	}))
+}
+
+func (a *App) deleteMedia(user string, ids []string) (int, error) {
+	a.uploadMu.Lock()
+	defer a.uploadMu.Unlock()
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	discarded := make(map[string]Media)
+	count := 0
+	err := a.change(user, "Уклоњени снимци из медијатеке", func(s *State) error {
+		s.Media = slices.DeleteFunc(s.Media, func(m Media) bool {
+			if !selected[m.ID] {
+				return false
+			}
+			discarded[m.Hash] = m
+			count++
+			return true
+		})
+		if count == 0 {
+			return bad("Изабрани снимци нису пронађени.")
+		}
+		for _, m := range s.Media {
+			delete(discarded, m.Hash)
+		}
+		for i := range s.Playlists {
+			s.Playlists[i].Tracks = slices.DeleteFunc(s.Playlists[i].Tracks, func(id string) bool { return selected[id] })
+		}
+		for i := range s.Stations {
+			if selected[s.Stations[i].Rules.JingleID] {
+				s.Stations[i].Rules.JingleID = ""
+			}
+		}
+		s.Events = slices.DeleteFunc(s.Events, func(e Event) bool { return e.Target == "track" && selected[e.Value] })
+		return nil
+	})
+	if err == nil {
+		for _, m := range discarded {
+			os.Remove(a.mediaPath(m))
+			os.Remove(filepath.Join(a.data, "media", m.Hash+".jpg"))
+		}
+	}
+	return count, err
 }

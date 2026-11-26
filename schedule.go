@@ -139,6 +139,19 @@ func (a *App) clock(ctx context.Context) {
 	}
 }
 func (a *App) automationRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/stations/{slug}/shuffle", a.permit("admin", func(w http.ResponseWriter, r *http.Request, user string) {
+		a.mu.Lock()
+		rot := a.rotate[r.PathValue("slug")]
+		if rot != nil {
+			rot.rank = nil
+		}
+		a.mu.Unlock()
+		if rot == nil {
+			fail(w, 404, "Станица није пронађена.")
+			return
+		}
+		respond(w, 200, true)
+	}))
 	mux.HandleFunc("POST /api/stations/{slug}/play", a.permit("admin,dj,editor", func(w http.ResponseWriter, r *http.Request, user string) {
 		var v struct {
 			ID        string

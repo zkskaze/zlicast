@@ -353,7 +353,7 @@
                       {:else if view==='stats'}
                         <Stats {data} {notify}/>
                         {:else if view==='admin'}
-                        <Admin {notify}/>{/if}
+                        <Admin stations={data.stations} {notify}/>{/if}
               <footer>ZKS <span>·</span> CRNBG.ORG</footer>
             </div>
           </main>

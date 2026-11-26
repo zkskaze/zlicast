@@ -21,13 +21,21 @@ const blockBytes = blockFrames * 4
 const startupFrames = 32
 
 type Track struct {
-	ID       string  `json:"id"`
-	Title    string  `json:"title"`
-	Artist   string  `json:"artist"`
-	Category string  `json:"category"`
-	Duration float64 `json:"duration"`
-	Path     string  `json:"-"`
+	ID        string  `json:"id"`
+	Title     string  `json:"title"`
+	Artist    string  `json:"artist"`
+	Category  string  `json:"category"`
+	Duration  float64 `json:"duration"`
+	Path      string  `json:"-"`
+	Temporary bool    `json:"-"`
 }
+
+func (t Track) discard() {
+	if t.Temporary {
+		_ = os.Remove(t.Path)
+	}
+}
+
 type Status struct {
 	Now            Track     `json:"now"`
 	Started        time.Time `json:"started"`
@@ -82,7 +90,22 @@ func newEngine(c ProgramConfig, next func() Track, played func(Track)) *Engine {
 	go e.run()
 	return e
 }
-func (e *Engine) close() { e.cancel(); <-e.done }
+func (e *Engine) close() {
+	e.cancel()
+	<-e.done
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for {
+		select {
+		case q := <-e.cues:
+			for _, t := range q.tracks {
+				t.discard()
+			}
+		default:
+			return
+		}
+	}
+}
 func (e *Engine) snapshot() Status {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -101,7 +124,9 @@ func (e *Engine) snapshot() Status {
 	return s
 }
 func (e *Engine) queue(tracks []Track, immediate bool) bool {
-	if len(tracks) == 0 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(tracks) == 0 || e.ctx.Err() != nil {
 		return false
 	}
 	select {
@@ -225,6 +250,7 @@ func (d *deck) read(b []byte) {
 func (d *deck) close() {
 	if d != nil && d.file != nil {
 		d.file.Close()
+		d.track.discard()
 	}
 }
 func (e *Engine) setTrack(t Track, live bool) {
@@ -364,6 +390,7 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 		}
 		d, err := openDeck(t)
 		if err != nil {
+			t.discard()
 			e.error()
 			d = fallback()
 		}
@@ -386,7 +413,13 @@ func (e *Engine) encode(cfg ProgramConfig) error {
 		current = d
 		e.setTrack(d.track, false)
 	}
-	defer func() { current.close(); previous.close() }()
+	defer func() {
+		current.close()
+		previous.close()
+		for _, t := range pending {
+			t.discard()
+		}
+	}()
 	b := make([]byte, blockBytes)
 	old := make([]byte, blockBytes)
 	tick := time.NewTicker(20 * time.Millisecond)

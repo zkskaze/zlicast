@@ -6,7 +6,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -101,9 +103,82 @@ func TestSimpleModeRotationAndInterrupt(t *testing.T) {
 	waitFor([]string{song, jingle, song, song})
 	call("POST", "/api/stations/zlifm/play", "application/json", strings.NewReader(`{"id":"`+news+`","interrupt":true}`), 200)
 	waitFor([]string{song, news, song})
+	before := call("GET", "/api/dashboard", "", nil, 200)
+	if bytes.Contains(before.Bytes(), []byte("one-off")) {
+		t.Fatal("test bulletin is already in the library")
+	}
+	mp3, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=970:duration=1.2", "-f", "mp3", "pipe:1").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	part, _ := form.CreateFormFile("file", "one-off.mp3")
+	part.Write(mp3)
+	form.Close()
+	call("POST", "/api/stations/zlifm/bulletin", form.FormDataContentType(), &body, 200)
+	var temporary Track
+	until := time.Now().Add(5 * time.Second)
+	for time.Now().Before(until) {
+		now := app.engine("zlifm").snapshot().Now
+		if now.Title == "one-off" {
+			temporary = now
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !temporary.Temporary {
+		t.Fatal("bulletin did not play as a temporary track")
+	}
+	until = time.Now().Add(5 * time.Second)
+	for app.engine("zlifm").snapshot().Now.ID == temporary.ID && time.Now().Before(until) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if app.engine("zlifm").snapshot().Now.ID == temporary.ID {
+		t.Fatal("regular rotation did not resume")
+	}
+	if _, err := os.Stat(temporary.Path); !os.IsNotExist(err) {
+		t.Fatal("bulletin file was retained after playing", err)
+	}
+	app.mu.RLock()
+	_, saved := findMedia(&app.state, temporary.ID)
+	app.mu.RUnlock()
+	if saved {
+		t.Fatal("one-off bulletin was saved to the library")
+	}
+	call("POST", "/api/stations/zlifm/shuffle", "", nil, 200)
+	deleted := call("POST", "/api/media/bulk-delete", "application/json", strings.NewReader(`{"ids":["`+news+`","`+otherJingle+`"]}`), 200)
+	if strings.TrimSpace(deleted.String()) != `{"deleted":2}` {
+		t.Fatal(deleted.String())
+	}
 	select {
 	case n := <-audioDone:
 		t.Fatalf("listener disconnected after %d bytes", n)
 	default:
+	}
+}
+
+func TestShuffleCompletesRoundWithFiveHundredSongs(t *testing.T) {
+	now := time.Now()
+	var rot rotation
+	songs := make([]Media, 500)
+	for i := range songs {
+		songs[i].Track = Track{ID: strconv.Itoa(i), Category: "music"}
+	}
+	seen := map[string]bool{}
+	var last Track
+	for i := range songs {
+		if i == 250 {
+			rot.rank = nil // The admin action reshuffles the rest of the round.
+		}
+		choice := rot.pick("music", songs, nil, Rules{}, now)
+		if seen[choice.ID] {
+			t.Fatalf("song %s repeated at position %d", choice.ID, i)
+		}
+		seen[choice.ID] = true
+		last = choice.Track
+	}
+	if choice := rot.pick("music", songs, []Entry{{At: now, Track: last}}, Rules{}, now); choice.ID == last.ID {
+		t.Fatal("last song repeated across rounds")
 	}
 }

@@ -110,6 +110,9 @@ type rotation struct {
 	songs      int
 	jingle, ad time.Time
 	hour       string
+	category   string
+	rank       map[string]uint64
+	played     map[string]bool
 }
 type App struct {
 	mu                           sync.RWMutex
@@ -276,6 +279,9 @@ func (a *App) onPlay(slug string, t Track) {
 		rot.jingle = now
 		rot.hour = now.In(a.loc).Format("2006-01-02T15")
 	}
+	if rot := a.rotate[slug]; t.Category == rot.category && rot.played != nil {
+		rot.played[t.ID] = true
+	}
 	if err := a.saveLocked(); err != nil {
 		log.Println(err)
 	}
@@ -333,30 +339,68 @@ func (a *App) next(slug string) Track {
 	if len(list) == 0 {
 		return Track{}
 	}
-	// Prefer an eligible track. With a tiny library use the least recently played.
-	best := -1.0
-	var chosen Media
-	randv2.Shuffle(len(list), func(i, j int) { list[i], list[j] = list[j], list[i] })
-	for _, m := range list {
-		score := 1.0
-		for _, h := range a.state.History[slug] {
-			elapsed := now.Sub(h.At).Minutes()
-			if r.RepeatSong > 0 && m.ID == h.ID {
-				score = min(score, elapsed/float64(r.RepeatSong))
-			}
-			if r.RepeatArtist > 0 && m.Artist != "" && strings.EqualFold(m.Artist, h.Artist) {
-				score = min(score, elapsed/float64(r.RepeatArtist))
-			}
+	chosen := rot.pick(category, list, a.state.History[slug], r, now)
+	return a.track(chosen)
+}
+
+func (rot *rotation) pick(category string, list []Media, history []Entry, rules Rules, now time.Time) Media {
+	if rot.category != category || rot.played == nil {
+		rot.category = category
+		rot.played = make(map[string]bool)
+		rot.rank = nil
+	}
+	if rot.rank == nil {
+		rot.rank = make(map[string]uint64)
+	}
+	if !slices.ContainsFunc(list, func(m Media) bool { return !rot.played[m.ID] }) {
+		clear(rot.played)
+		clear(rot.rank)
+	}
+
+	lastTrack, lastArtist := make(map[string]time.Time), make(map[string]time.Time)
+	previous := ""
+	for _, h := range history {
+		if previous == "" && h.Category == category {
+			previous = h.ID
 		}
-		if score > best {
-			best = score
-			chosen = m
+		if _, seen := lastTrack[h.ID]; !seen {
+			lastTrack[h.ID] = h.At
 		}
-		if score >= 1 {
-			break
+		if artist := strings.ToLower(h.Artist); artist != "" {
+			if _, seen := lastArtist[artist]; !seen {
+				lastArtist[artist] = h.At
+			}
 		}
 	}
-	return a.track(chosen)
+
+	best := -2.0
+	var chosen Media
+	for _, m := range list {
+		if rot.played[m.ID] {
+			continue
+		}
+		rank, exists := rot.rank[m.ID]
+		if !exists {
+			rank = randv2.Uint64()
+			rot.rank[m.ID] = rank
+		}
+		score := 1.0
+		if at, ok := lastTrack[m.ID]; ok && rules.RepeatSong > 0 {
+			score = min(score, now.Sub(at).Minutes()/float64(rules.RepeatSong))
+		}
+		if at, ok := lastArtist[strings.ToLower(m.Artist)]; ok && rules.RepeatArtist > 0 {
+			score = min(score, now.Sub(at).Minutes()/float64(rules.RepeatArtist))
+		}
+		score = max(0, score)
+		if m.ID == previous {
+			score = -1
+		}
+		if score > best || score == best && rank < rot.rank[chosen.ID] {
+			chosen, best = m, score
+		}
+	}
+	rot.played[chosen.ID] = true
+	return chosen
 }
 func (a *App) stop() {
 	a.mu.Lock()

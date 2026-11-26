@@ -3,6 +3,24 @@
   import { api, clock } from './api.js';
   import Icon from './Icon.svelte';
   export let notify;
+  export let stations = [];
+  let shuffleStation = '';
+  let shuffling = false;
+  $: if (!stations.some(station => station.slug === shuffleStation)) {
+    shuffleStation = stations[0]?.slug || '';
+  }
+
+  async function shuffle() {
+    shuffling = true;
+    try {
+      await api('/api/stations/' + encodeURIComponent(shuffleStation) + '/shuffle', 'POST');
+      notify('Преостале песме су поново измешане.');
+    } catch (e) {
+      notify(e.message);
+    } finally {
+      shuffling = false;
+    }
+  }
   let info = null,
     kind = 'users',
     name = '',
@@ -68,6 +86,24 @@
     }
   }
 </script>
+{#if stations.length}
+  <section class="panel">
+    <h2>Редослед песама</h2>
+    <form on:submit|preventDefault={shuffle}>
+      <div class="controls">
+        <label>Станица
+          <select bind:value={shuffleStation} disabled={shuffling}>
+            {#each stations as station (station.slug)}
+              <option value={station.slug}>{station.name}</option>
+            {/each}
+          </select>
+        </label>
+        <button disabled={shuffling || !shuffleStation}>Измешај преостале песме</button>
+      </div>
+      <small>Нови редослед важи од следеће песме.</small>
+    </form>
+  </section>
+{/if}
 <section class="panel">
   <div class="row">
     <h2>Приступ и интеграције</h2>

@@ -17,6 +17,7 @@
   let jingle = station.rules.jingleId || '';
   let news = '';
   let song = '';
+  let songQuery = '';
   let busy = '';
   let songsInput;
   let jingleInput;
@@ -25,6 +26,8 @@
 
   $: available = media.filter(m => !m.station || m.station === station.slug);
   $: songs = available.filter(m => m.category === 'music');
+  $: matchingSongs = songs.filter(m => (m.title + ' ' + (m.artist || '')).toLowerCase().includes(songQuery.trim().toLowerCase()));
+  $: if (song && !matchingSongs.some(m => m.id === song)) song = '';
   $: jingles = available.filter(m => m.category === 'jingles');
   $: bulletins = available.filter(m => ['news', 'emergency', 'shows'].includes(m.category));
   $: canUpload = permitted(role, 'dj', 'editor');
@@ -83,9 +86,13 @@
 
   function playNews(file) {
     withAction('Шаљем снимак у етар…', async () => {
-      const id = file ? (await upload(file, 'news')).id : news;
-      await playNow(id);
-      news = id;
+      if (file) {
+        const form = new FormData();
+        form.append('file', file);
+        await api('/api/stations/' + station.slug + '/bulletin', 'POST', form);
+      } else {
+        await playNow(news);
+      }
       notify('Снимак је послат у етар.');
     });
   }
@@ -130,11 +137,14 @@
       on:change={(event) => { addSongs(event.currentTarget.files); event.currentTarget.value = ''; }}/>
     {#if songs.length}
       <form on:submit|preventDefault={playSong}>
+        <label>Претражи песме
+          <input type="search" placeholder="Назив или извођач" bind:value={songQuery}/>
+        </label>
         <label>Песма у ротацији
-          <select bind:value={song}>
-            <option value="">Изабери песму</option>
-            {#each songs as item (item.id)}
-              <option value={item.id}>{item.title}</option>
+          <select bind:value={song} disabled={!matchingSongs.length}>
+            <option value="">{matchingSongs.length ? 'Изабери песму' : 'Нема песама за ову претрагу'}</option>
+            {#each matchingSongs as item (item.id)}
+              <option value={item.id}>{item.title}{item.artist ? ' · ' + item.artist : ''}</option>
             {/each}
           </select>
         </label>
@@ -177,7 +187,7 @@
 {#if canUpload}
   <section class="panel">
     <h2>Вести и обавештења</h2>
-    <p>Снимак прекида тренутну песму. Кад се заврши, радио наставља с музиком.</p>
+    <p>Отпремљени снимак пушта се једном и не улази у медијатеку. Кад се заврши, радио наставља с музиком.</p>
     {#if bulletins.length}
       <label>Сачувани снимак
         <select bind:value={news}>
@@ -190,7 +200,7 @@
     {/if}
     <div class="controls">
       <button type="button" class="primary" disabled={!!busy} on:click={() => newsInput.click()}>
-        <Icon name="megaphone" size={16}/> Додај и пусти одмах
+        <Icon name="megaphone" size={16}/> Отпреми и пусти једном
       </button>
       {#if bulletins.length}
         <button type="button" disabled={!!busy || !news} on:click={() => playNews()}>Пусти изабрани снимак</button>
