@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +17,8 @@ import (
 )
 
 var youtubeID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
+
+const youtubeCookiesFile = "youtube-cookies.txt"
 
 func youtubeVideoID(link string) string {
 	u, err := url.Parse(strings.TrimSpace(link))
@@ -99,18 +103,29 @@ func (a *App) importYouTube(ctx context.Context, user, downloader, id string, op
 	}
 	defer os.RemoveAll(metadataDir)
 
+	hasCookies, err := stageYouTubeCookies(a.data, metadataDir)
+	if err != nil {
+		return Media{}, false, err
+	}
+
 	downloadCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	const metadataFile = "labels.json"
-	cmd := exec.CommandContext(downloadCtx, downloader,
+	args := []string{
 		"--ignore-config", "--no-plugin-dirs", "--no-cache-dir", "--no-update",
 		"--no-playlist", "--no-progress", "--quiet", "--no-simulate", "--socket-timeout", "12", "--retries", "1",
 		"--format", "bestaudio[protocol=https]", "--match-filters", "duration <= 14400 & !is_live",
 		"--max-filesize", "512M", "--output", "-", "--output-na-placeholder", "null",
 		"--print-to-file", `before_dl:{"title":%(track,title).500j,"artist":%(artist,uploader).500j}`, metadataFile,
-		"--", "https://www.youtube.com/watch?v="+id)
+	}
+	if hasCookies {
+		args = append(args, "--cookies", youtubeCookiesFile)
+	}
+	args = append(args, "--", "https://www.youtube.com/watch?v="+id)
+	cmd := exec.CommandContext(downloadCtx, downloader, args...)
 	cmd.Dir = metadataDir
-	cmd.Stderr = os.Stderr
+	var diagnostic youtubeDiagnostic
+	cmd.Stderr = io.MultiWriter(os.Stderr, &diagnostic)
 	audio, err := cmd.StdoutPipe()
 	if err != nil {
 		return Media{}, false, bad("Није могуће покренути yt-dlp.")
@@ -135,7 +150,7 @@ func (a *App) importYouTube(ctx context.Context, user, downloader, id string, op
 		return Media{}, false, stageErr
 	}
 	if downloadErr != nil || stageErr != nil {
-		return Media{}, false, bad("Преузимање није успело. Провери да ли је снимак јаван, завршен и у оквиру ограничења од четири сата и 512 MiB.")
+		return Media{}, false, youtubeDownloadError(diagnostic.tail, hasCookies)
 	}
 
 	var labels mediaLabels
@@ -146,4 +161,52 @@ func (a *App) importYouTube(ctx context.Context, user, downloader, id string, op
 		labels.Title = "YouTube " + id
 	}
 	return a.importStagedMedia(ctx, user, work, digest, labels, options)
+}
+
+func stageYouTubeCookies(dataDir, workDir string) (bool, error) {
+	content, err := os.ReadFile(filepath.Join(dataDir, youtubeCookiesFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, bad("Сервер не може да прочита фајл youtube-cookies.txt.")
+	}
+	header, _, _ := bytes.Cut(content, []byte("\n"))
+	switch string(bytes.TrimSpace(header)) {
+	case "# Netscape HTTP Cookie File", "# HTTP Cookie File":
+	default:
+		return false, bad("Извези YouTube колачиће у Netscape формату и сачувај их као youtube-cookies.txt.")
+	}
+	// yt-dlp writes to its cookie jar. Each import gets a separate copy.
+	if err := os.WriteFile(filepath.Join(workDir, youtubeCookiesFile), content, 0600); err != nil {
+		return false, bad("Сервер не може да припреми YouTube колачиће.")
+	}
+	return true, nil
+}
+
+type youtubeDiagnostic struct {
+	tail string
+}
+
+func (d *youtubeDiagnostic) Write(p []byte) (int, error) {
+	const maxDiagnostic = 8192
+	d.tail += string(p)
+	if len(d.tail) > maxDiagnostic {
+		d.tail = d.tail[len(d.tail)-maxDiagnostic:]
+	}
+	return len(p), nil
+}
+
+func youtubeDownloadError(details string, hasCookies bool) error {
+	message := strings.ToLower(strings.ReplaceAll(details, "’", "'"))
+	if strings.Contains(message, "sign in to confirm you're not a bot") {
+		if hasCookies {
+			return bad("YouTube и даље тражи пријаву са овог сервера. Освежи YouTube колачиће у фајлу youtube-cookies.txt и покушај поново.")
+		}
+		return bad("YouTube тражи пријаву са овог сервера. Постави YouTube колачиће у data/youtube-cookies.txt.")
+	}
+	if hasCookies && strings.Contains(message, "account cookies are no longer valid") {
+		return bad("YouTube колачићи више не важе. Извези нове у youtube-cookies.txt и покушај поново.")
+	}
+	return bad("Преузимање са YouTube-а није успело. Детаљи су у журналу сервера. Увоз подржава завршене снимке до четири сата и 512 MiB.")
 }

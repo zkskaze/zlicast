@@ -30,6 +30,10 @@ FFmpeg и FFprobe морају бити у PATH-у. На рачунару на �
 
 За YouTube увоз на Windows-у серверу су потребни `yt-dlp` и Deno. Можеш да их инсталираш командама `winget install -e --id yt-dlp.yt-dlp` и `winget install -e --id DenoLand.Deno`. Ако сервер не налази `yt-dlp` у PATH-у, упиши пуну путању до алата у `ZLICAST_YT_DLP` у `.env`. Поново покрени сервер после измене. Docker слика укључује оба алата.
 
+### YouTube пријава на серверу
+
+Кад YouTube тражи пријаву, извези само колачиће за `youtube.com` у Netscape формату. На Docker серверу постави фајл `data/youtube-cookies.txt` поред Compose фајла, унутар директоријума `data`. За самостални EXE користи директоријум из `ZLICAST_DATA`. На Linux-у ограничи дозволе фајла на `600`. Фајл садржи приватну сесију и остаје на серверу, ван Git-а и ZIP извоза. ZliCast учитава фајл при сваком увозу. [Упутство yt-dlp за извоз YouTube колачића](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
+
 ## Адресе
 
 У `.env` постави `ZLICAST_PORT=1907` или изабери други порт. Сервер слуша на свим мрежним интерфејсима. За слушање преко Tailscale-а пошаљи `http://TAILSCALE-IP:1907/listen/kaze`, са Tailscale IP адресом рачунара и подешеним портом. У локалној мрежи користи LAN адресу. Ако стара инсталација користи `ZLICAST_ADDR=localhost:1907`, додај `ZLICAST_PORT=1907` или замени стару ставку њоме и покрени сервер поново.

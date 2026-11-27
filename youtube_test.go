@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +78,61 @@ func TestYouTubeImportValidatesBeforeDownload(t *testing.T) {
 		handler.ServeHTTP(response, req)
 		if response.Code != test.status {
 			t.Errorf("%s: status %d, want %d, response %s", test.body, response.Code, test.status, response.Body)
+		}
+	}
+}
+
+func TestYouTubeCookiesAreOptionalAndCopiedPerImport(t *testing.T) {
+	dataDir, workDir := t.TempDir(), t.TempDir()
+	if present, err := stageYouTubeCookies(dataDir, workDir); present || err != nil {
+		t.Fatalf("anonymous import: present %v, error %v", present, err)
+	}
+	source := filepath.Join(dataDir, youtubeCookiesFile)
+	if err := os.WriteFile(source, []byte("invalid export"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if present, err := stageYouTubeCookies(dataDir, workDir); present || err == nil {
+		t.Fatalf("invalid cookie export: present %v, error %v", present, err)
+	}
+	const fixture = "# Netscape HTTP Cookie File\r\n.youtube.com\tTRUE\t/\tTRUE\t0\tfixture\tsynthetic\r\n"
+	if err := os.WriteFile(source, []byte(fixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if present, err := stageYouTubeCookies(dataDir, workDir); !present || err != nil {
+		t.Fatalf("authenticated import: present %v, error %v", present, err)
+	}
+	staged := filepath.Join(workDir, youtubeCookiesFile)
+	if raw, err := os.ReadFile(staged); string(raw) != fixture || err != nil {
+		t.Fatalf("copied cookie jar: %s, error %v", raw, err)
+	}
+	if err := os.WriteFile(staged, []byte("yt-dlp updated its cookie jar"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(source); string(raw) != fixture || err != nil {
+		t.Fatalf("source cookie jar changed: %s, error %v", raw, err)
+	}
+}
+
+func TestYouTubeSignInError(t *testing.T) {
+	tests := []struct {
+		details    string
+		hasCookies bool
+		want       string
+	}{
+		{"ERROR: [youtube] 2FJlbPqka3M: Sign in to confirm you’re not a bot.", false, "data/youtube-cookies.txt"},
+		{"ERROR: [youtube] Sign in to confirm you're not a bot.", true, "Освежи YouTube колачиће"},
+		{"WARNING: The provided YouTube account cookies are no longer valid.", true, "више не важе"},
+		{"ERROR: yt-dlp failed at /private/path", false, "Детаљи су у журналу сервера"},
+	}
+	for _, test := range tests {
+		var diagnostic youtubeDiagnostic
+		_, _ = diagnostic.Write([]byte(strings.Repeat("x", 10000)))
+		for _, part := range []string{test.details[:12], test.details[12:]} {
+			_, _ = diagnostic.Write([]byte(part))
+		}
+		got := youtubeDownloadError(diagnostic.tail, test.hasCookies).Error()
+		if !strings.Contains(got, test.want) || strings.Contains(got, "/private/path") {
+			t.Errorf("%q: got %q, want %q", test.details, got, test.want)
 		}
 	}
 }
