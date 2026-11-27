@@ -279,6 +279,15 @@ func (e *Engine) setTrack(t Track, live bool) {
 	e.mu.Unlock()
 	e.played(t)
 }
+
+func (e *Engine) updateTrackTitle(id, title string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.status.Now.ID == id {
+		e.status.Now.Title = title
+	}
+}
+
 func (e *Engine) run() {
 	defer close(e.done)
 	for e.ctx.Err() == nil {

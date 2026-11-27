@@ -80,4 +80,13 @@ func TestMediaImportContinuesAfterUploadRequest(t *testing.T) {
 	if failed := waitFor(post([]byte("not audio")), "failed"); failed.Error == "" {
 		t.Fatal("failed import did not expose an error")
 	}
+
+	target := "/api/media/" + status.Media.ID
+	call("PATCH", target, "application/json", strings.NewReader(`{"title":" "}`), 400)
+	call("PATCH", target, "application/json", strings.NewReader(`{"title":" Нови наслов "}`), 200)
+	renamed := waitFor(post(webm), "complete")
+	if !renamed.Duplicate || renamed.Media == nil || renamed.Media.ID != status.Media.ID ||
+		renamed.Media.Hash != status.Media.Hash || renamed.Media.Title != "Нови наслов" {
+		t.Fatalf("renaming should preserve the original media and its audio: %+v", renamed)
+	}
 }

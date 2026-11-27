@@ -279,8 +279,13 @@ func (a *App) startStation(s Station) {
 func (a *App) onPlay(slug string, t Track) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.engines[slug] == nil {
+	e := a.engines[slug]
+	if e == nil {
 		return
+	}
+	if m, ok := findMedia(&a.state, t.ID); ok && m.Title != t.Title {
+		t.Title = m.Title
+		e.updateTrackTitle(t.ID, t.Title)
 	}
 	h := append([]Entry{{time.Now(), t}}, a.state.History[slug]...)
 	if len(a.state.Hooks) > 0 && (t.Category == "live" || len(h) > 1 && h[1].Category == "live") {

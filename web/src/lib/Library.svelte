@@ -1,6 +1,8 @@
 <script>
   import Icon from './Icon.svelte';
+  import YouTubeImport from './YouTubeImport.svelte';
   import { api, importMedia, cats, duration, permitted } from './api.js';
+  import { focusDialog } from './dialog.js';
   export let data, refresh, notify;
   let query = '',
     filter = '',
@@ -20,6 +22,32 @@
     marked = new Set(),
     deleting = false,
     uploadErrors = [];
+  let renameTarget = '', title = '', renameError = '', savingTitle = false;
+
+  function openRename(media) {
+    renameTarget = media.id;
+    title = media.title;
+    renameError = '';
+  }
+  function closeRename() {
+    if (!savingTitle) renameTarget = '';
+  }
+  async function saveTitle() {
+    if (savingTitle || !title.trim()) return;
+    savingTitle = true;
+    renameError = '';
+    try {
+      await api('/api/media/' + renameTarget, 'PATCH', { title: title.trim() });
+      renameTarget = '';
+      await refresh();
+      notify('Наслов је сачуван.');
+    } catch (error) {
+      renameError = error.message;
+    } finally {
+      savingTitle = false;
+    }
+  }
+
   async function upload(files) {
     if (busy || !files?.length) return;
     busy = true;
@@ -99,6 +127,7 @@
         .includes(query.trim().toLowerCase())
   );
   $: canDelete = permitted(data.role, 'editor');
+  $: canEdit = permitted(data.role, 'editor', 'dj');
   $: pageCount = Math.max(1, Math.ceil(list.length / pageSize));
   $: currentPage = Math.min(page, pageCount);
   $: start = (currentPage - 1) * pageSize;
@@ -119,6 +148,7 @@
       <strong>{busy?progress:'Превуци музику овде'}</strong><span>или изабери фајлове · MP3, FLAC, WAV, OGG, M4A, AAC</span>
     </button>
     <input class="hidden" type="file" multiple bind:this={picker} accept="audio/*,.m4a,.aac,.flac,.webm" on:change={(e)=>upload(e.target.files)}/>
+    <YouTubeImport station={scope} category={cat} {tags} {expires} disabled={busy} {refresh}/>
     {#if uploadErrors.length}
       <details open>
         <summary>Неуспела отпремања ({uploadErrors.length})</summary>
@@ -126,7 +156,7 @@
       </details>
     {/if}
     <details>
-      <summary>Опције отпремања</summary>
+      <summary>Опције увоза</summary>
       <div class="formgrid">
         <label>Категорија
           <select bind:value={cat}>
@@ -202,7 +232,15 @@
         {#if m.cover}<img src={m.cover} alt="" loading="lazy"/>{:else}
           <Icon name="music-2"/>{/if}
       </div>
-      <div class="grow"><b>{m.title}</b>
+      <div class="grow">
+        {#if canEdit}
+          <button type="button" class="track-title" title="Преименуј снимак"
+            aria-label={'Преименуј ' + m.title} on:click={() => openRename(m)}>
+            <b>{m.title}</b><Icon name="pencil" size={13}/>
+          </button>
+        {:else}
+          <b>{m.title}</b>
+        {/if}
         <small>{m.artist||cats[m.category]} · {m.station||'Заједничка'}</small>
       </div><span class="mono">{duration(m.duration)}</span>
       <button class="icon" aria-label={'Преслушај '+m.title} on:click={()=>preview=preview===m.id?'':m.id}>
@@ -240,7 +278,41 @@
   {/if}
 </section>
 
+{#if renameTarget}
+  <div class="overlay">
+    <div class="dialog" use:focusDialog={closeRename} role="dialog" aria-modal="true" aria-label="Преименуј снимак">
+      <h2>Преименуј снимак</h2>
+      <form on:submit|preventDefault={saveTitle}>
+        <label>Нови наслов
+          <input bind:value={title} maxlength="200" required disabled={savingTitle}/>
+        </label>
+        {#if renameError}<p class="error" role="alert">{renameError}</p>{/if}
+        <div class="actions">
+          <button type="button" disabled={savingTitle} on:click={closeRename}>Откажи</button>
+          <button type="submit" class="primary" disabled={savingTitle || !title.trim()}>Сачувај</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{/if}
+
 <style>
+  .track-title {
+    display: flex;
+    justify-content: flex-start;
+    max-width: 100%;
+    min-height: 0;
+    height: auto;
+    gap: 5px;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    text-align: left;
+  }
+  .track-title:hover { color: var(--accent); background: transparent; }
+  .track-title b { min-width: 0; }
+  .track-title :global(svg) { flex: none; }
   .selection-bar, .pagination {
     display: flex;
     flex-wrap: wrap;

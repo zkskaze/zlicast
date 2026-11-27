@@ -15,11 +15,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var categories = []string{"music", "jingles", "news", "ads", "shows", "emergency"}
 
 const uploadLimit int64 = 512 << 20
+
+var errEmptyMedia = bad("Фајл је празан.")
 
 var audioInputFlags = []string{"-v", "error", "-protocol_whitelist", "file,pipe", "-format_whitelist", "mp3,flac,wav,ogg,mov,matroska,webm,aac,asf,aiff"}
 
@@ -40,6 +44,42 @@ type probeInfo struct {
 		Codec_type  string
 		Disposition struct{ Attached_pic int }
 	}
+}
+
+type mediaLabels struct {
+	Title  string `json:"title"`
+	Artist string `json:"artist"`
+}
+
+func mediaLabelsFromFilename(filename string) mediaLabels {
+	return mediaLabels{Title: strings.TrimSuffix(filepath.Base(strings.ReplaceAll(filename, "\\", "/")), filepath.Ext(filename))}
+}
+
+type mediaImportOptions struct {
+	Category string `json:"category"`
+	Station  string `json:"station"`
+	Tags     string `json:"tags"`
+	Expires  string `json:"expires"`
+	Title    string `json:"title"`
+}
+
+func validMediaTitle(title string) bool {
+	return title != "" && utf8.RuneCountInString(title) <= 200 && strings.IndexFunc(title, unicode.IsControl) < 0
+}
+
+func (options mediaImportOptions) validate() error {
+	if !slices.Contains(categories, options.Category) {
+		return bad("Непозната категорија.")
+	}
+	if options.Title != "" && !validMediaTitle(options.Title) {
+		return bad("Наслов може да има до 200 знакова у једном реду.")
+	}
+	if options.Expires != "" {
+		if _, err := time.Parse("2006-01-02", options.Expires); err != nil {
+			return bad("Провери датум истека.")
+		}
+	}
+	return nil
 }
 
 func (a *App) stageMedia(src io.Reader) (work, digest string, err error) {
@@ -66,7 +106,10 @@ func (a *App) stageMedia(src io.Reader) (work, digest string, err error) {
 	if closeErr != nil {
 		return "", "", closeErr
 	}
-	if n > uploadLimit || n == 0 {
+	if n == 0 {
+		return "", "", errEmptyMedia
+	}
+	if n > uploadLimit {
 		return "", "", bad("Фајл мора бити између 1 бајта и 512 MiB.")
 	}
 	return work, hex.EncodeToString(hash.Sum(nil)), nil
@@ -78,18 +121,14 @@ func (a *App) addMedia(ctx context.Context, user string, src io.Reader, filename
 		return Media{}, false, err
 	}
 	defer os.RemoveAll(work)
-	return a.importStagedMedia(ctx, user, work, digest, filename, cat, slug, tags, expiry)
+	options := mediaImportOptions{Category: cat, Station: slug, Tags: tags, Expires: expiry}
+	return a.importStagedMedia(ctx, user, work, digest, mediaLabelsFromFilename(filename), options)
 }
 
-func (a *App) importStagedMedia(ctx context.Context, user, work, digest, filename, cat, slug, tags, expiry string) (Media, bool, error) {
+func (a *App) importStagedMedia(ctx context.Context, user, work, digest string, labels mediaLabels, options mediaImportOptions) (Media, bool, error) {
 	var m Media
-	if !slices.Contains(categories, cat) {
-		return m, false, bad("Непозната категорија.")
-	}
-	if expiry != "" {
-		if _, err := time.Parse("2006-01-02", expiry); err != nil {
-			return m, false, bad("Провери датум истека.")
-		}
+	if err := options.validate(); err != nil {
+		return m, false, err
 	}
 	raw := filepath.Join(work, "input")
 	a.uploadMu.Lock()
@@ -98,9 +137,9 @@ func (a *App) importStagedMedia(ctx context.Context, user, work, digest, filenam
 		return m, false, err
 	}
 	a.mu.RLock()
-	stationOK := slug == "" || hasStation(&a.state, slug)
+	stationOK := options.Station == "" || hasStation(&a.state, options.Station)
 	for _, v := range a.state.Media {
-		if v.Hash == digest && v.Station == slug && v.Category == cat {
+		if v.Hash == digest && v.Station == options.Station && v.Category == options.Category {
 			a.mu.RUnlock()
 			return v, true, nil
 		}
@@ -136,22 +175,28 @@ func (a *App) importStagedMedia(ctx context.Context, user, work, digest, filenam
 	}
 	m.ID = randomID()
 	m.Hash = digest
-	m.Title = strings.TrimSuffix(filepath.Base(strings.ReplaceAll(filename, "\\", "/")), filepath.Ext(filename))
-	m.Category = cat
-	m.Station = slug
-	m.Expires = expiry
+	m.Title = labels.Title
+	m.Artist = labels.Artist
+	m.Category = options.Category
+	m.Station = options.Station
+	m.Expires = options.Expires
 	m.Tags = []string{}
 	for k, v := range p.Format.Tags {
 		switch strings.ToLower(k) {
 		case "artist":
-			m.Artist = v
+			if strings.TrimSpace(v) != "" {
+				m.Artist = v
+			}
 		case "title":
 			if strings.TrimSpace(v) != "" {
 				m.Title = v
 			}
 		}
 	}
-	for _, t := range strings.Split(tags, ",") {
+	if options.Title != "" {
+		m.Title = options.Title
+	}
+	for _, t := range strings.Split(options.Tags, ",") {
 		if v := strings.TrimSpace(t); v != "" && !slices.Contains(m.Tags, v) {
 			m.Tags = append(m.Tags, v)
 		}
@@ -189,7 +234,7 @@ func (a *App) importStagedMedia(ctx context.Context, user, work, digest, filenam
 		m.Cover = "/api/media/" + m.ID + "/cover"
 	}
 	err = a.change(user, "Додат снимак · "+m.Title, func(s *State) error {
-		if slug != "" && !hasStation(s, slug) {
+		if options.Station != "" && !hasStation(s, options.Station) {
 			return bad("Станица је уклоњена.")
 		}
 		s.Media = append(s.Media, m)
@@ -298,11 +343,17 @@ func (a *App) mediaRoutes(mux *http.ServeMux) {
 			fail(w, 400, err.Error())
 			return
 		}
-		category, station, tags, expires := r.FormValue("category"), r.FormValue("station"), r.FormValue("tags"), r.FormValue("expires")
+		labels := mediaLabelsFromFilename(header.Filename)
+		options := mediaImportOptions{
+			Category: r.FormValue("category"),
+			Station:  r.FormValue("station"),
+			Tags:     r.FormValue("tags"),
+			Expires:  r.FormValue("expires"),
+		}
 		if r.URL.Query().Get("async") == "1" {
 			id, ok := a.imports.start(user, func(ctx context.Context) (Media, bool, error) {
 				defer os.RemoveAll(work)
-				return a.importStagedMedia(ctx, user, work, digest, header.Filename, category, station, tags, expires)
+				return a.importStagedMedia(ctx, user, work, digest, labels, options)
 			})
 			if !ok {
 				os.RemoveAll(work)
@@ -313,14 +364,16 @@ func (a *App) mediaRoutes(mux *http.ServeMux) {
 			return
 		}
 		defer os.RemoveAll(work)
-		m, dup, err := a.importStagedMedia(r.Context(), user, work, digest, header.Filename, category, station, tags, expires)
+		m, dup, err := a.importStagedMedia(r.Context(), user, work, digest, labels, options)
 		if err != nil {
 			fail(w, 400, err.Error())
 			return
 		}
 		respond(w, 200, map[string]any{"media": m, "duplicate": dup})
 	}))
+	mux.HandleFunc("POST /api/media/youtube", a.permit("admin,editor,dj", a.submitYouTubeImport))
 	mux.HandleFunc("GET /api/media/imports/{job}", a.permit("admin,editor,dj", a.imports.status))
+	mux.HandleFunc("PATCH /api/media/{id}", a.permit("admin,editor,dj", a.renameMedia))
 	mux.HandleFunc("GET /api/media/{id}/{kind}", a.permit("*", func(w http.ResponseWriter, r *http.Request, user string) {
 		a.mu.RLock()
 		m, ok := findMedia(&a.state, r.PathValue("id"))
@@ -359,6 +412,40 @@ func (a *App) mediaRoutes(mux *http.ServeMux) {
 		}
 		respond(w, 200, map[string]int{"deleted": n})
 	}))
+}
+
+func (a *App) renameMedia(w http.ResponseWriter, r *http.Request, user string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var form struct{ Title string }
+	if err := decode(r, &form); err != nil {
+		fail(w, 400, "Неисправан захтев за преименовање.")
+		return
+	}
+	title := strings.TrimSpace(form.Title)
+	if !validMediaTitle(title) {
+		fail(w, 400, "Упиши наслов од 1 до 200 знакова у једном реду.")
+		return
+	}
+	id := r.PathValue("id")
+	err := a.change(user, "Преименован снимак · "+title, func(s *State) error {
+		for i := range s.Media {
+			if s.Media[i].ID == id {
+				s.Media[i].Title = title
+				return nil
+			}
+		}
+		return bad("Снимак није пронађен.")
+	})
+	if err == nil {
+		a.mu.RLock()
+		if m, ok := findMedia(&a.state, id); ok {
+			for _, e := range a.engines {
+				e.updateTrackTitle(id, m.Title)
+			}
+		}
+		a.mu.RUnlock()
+	}
+	result(w, err)
 }
 
 func (a *App) deleteMedia(user string, ids []string) (int, error) {

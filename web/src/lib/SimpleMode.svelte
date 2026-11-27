@@ -3,6 +3,7 @@
   import PlaybackControls from './PlaybackControls.svelte';
   import StationDetails from './StationDetails.svelte';
   import TrackProgress from './TrackProgress.svelte';
+  import YouTubeImport from './YouTubeImport.svelte';
   import { api, importMedia, permitted } from './api.js';
 
   export let station;
@@ -218,6 +219,7 @@
     </button>
     <input class="hidden" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.ogg,.m4a,.aac" bind:this={songsInput}
       on:change={(event) => { addSongs(event.currentTarget.files); event.currentTarget.value = ''; }}/>
+    <YouTubeImport station={station.slug} disabled={!!busy} {refresh}/>
     {#if uploadErrors.length}
       <details open>
         <summary>Неуспела отпремања ({uploadErrors.length})</summary>

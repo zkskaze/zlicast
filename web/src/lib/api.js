@@ -22,9 +22,12 @@ export async function api(path, method = 'GET', value) {
 }
 
 export async function importMedia(form, onProcessing) {
-  const { job } = await api('/api/media?async=1', 'POST', form);
-  if (!job) throw new Error('ZliCast није потврдио пријем фајла.');
-  onProcessing();
+  return waitForMediaImport(await api('/api/media?async=1', 'POST', form), onProcessing);
+}
+
+export async function waitForMediaImport({ job }, onProcessing) {
+  if (!job) throw new Error('ZliCast није потврдио захтев за увоз.');
+  onProcessing?.();
   for (;;) {
     await new Promise(resolve => setTimeout(resolve, 1200));
     const status = await api('/api/media/imports/' + encodeURIComponent(job));
