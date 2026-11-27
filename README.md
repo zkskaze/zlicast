@@ -57,6 +57,8 @@ FFmpeg и FFprobe морају бити у PATH-у. На рачунару на �
 
 ## Изградња
 
+Локална историја развоја је на грани `main`. За засебну копију историје из архиве користи `git clone dist/zlicast-history.bundle zlicast-src`.
+
 Спакован WebUI је у `web/build`. За поновну изградњу истог EXE довољни су Go и команда `go build -trimpath -o zlicast.exe .`. За рад на интерфејсу у `web` покрени `npm install` и `npm run build`, па понови Go build. Извори SvelteKit-а су у `web/src`, лиценце за Lucide и Manrope у `web/static/licenses`. За тестове користи `go test -race ./...`. На Linux-у су за изградњу потребни C компајлер и SQLite развојни пакет.
 
 `docker-compose.yml` користи `ghcr.io/zkskaze/zlicast:latest` са `pull_policy: always`. Постави `.env` поред Compose фајла, упиши `ADMIN_PASSWORD` и покрени `docker compose up -d`. `ZLICAST_PORT` одређује порт на хосту, а контејнер слуша на `8080`. SQLite, медији, снимци и остали трајни подаци иду у `./data/` поред Compose фајла преко bind mount-а. За приватну слику прво пријави Docker на GHCR.
